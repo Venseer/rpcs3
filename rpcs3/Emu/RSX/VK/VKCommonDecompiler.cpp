@@ -6,22 +6,7 @@
 
 namespace vk
 {
-	std::string getFloatTypeNameImpl(size_t elementCount)
-	{
-		switch (elementCount)
-		{
-		default:
-			abort();
-		case 1:
-			return "float";
-		case 2:
-			return "vec2";
-		case 3:
-			return "vec3";
-		case 4:
-			return "vec4";
-		}
-	}
+	static TBuiltInResource g_default_config;
 
 	std::string getFunctionImpl(FUNCTION f)
 	{
@@ -62,11 +47,11 @@ namespace vk
 		case FUNCTION::FUNCTION_TEXTURE_SAMPLE2D_LOD:
 			return "textureLod($t, $0.xy * texture_parameters[$_i].xy, $1.x)";
 		case FUNCTION::FUNCTION_TEXTURE_SAMPLE2D_GRAD:
-			return "textureGrad($t, $0.xy, $1.xy, $2.xy)"; // Note: $1.x is bias
+			return "textureGrad($t, $0.xy * texture_parameters[$_i].xy, $1.xy, $2.xy)"; // Note: $1.x is bias
 		case FUNCTION::FUNCTION_TEXTURE_SAMPLECUBE:
 			return "texture($t, $0.xyz)";
 		case FUNCTION::FUNCTION_TEXTURE_SAMPLECUBE_PROJ:
-			return "textureProj($t, $0.xyzw, $1.x)"; // Note: $1.x is bias
+			return "texture($t, ($0.xyz / $0.w))";
 		case FUNCTION::FUNCTION_TEXTURE_SAMPLECUBE_LOD:
 			return "textureLod($t, $0.xyz, $1.x)";
 		case FUNCTION::FUNCTION_TEXTURE_SAMPLECUBE_GRAD:
@@ -80,61 +65,6 @@ namespace vk
 		case FUNCTION::FUNCTION_TEXTURE_SAMPLE2D_DEPTH_RGBA:
 			return "texture2DReconstruct($t, $0.xy)";
 		}
-	}
-
-	std::string compareFunctionImpl(COMPARE f, const std::string &Op0, const std::string &Op1)
-	{
-		switch (f)
-		{
-		case COMPARE::FUNCTION_SEQ:
-			return "equal(" + Op0 + ", " + Op1 + ")";
-		case COMPARE::FUNCTION_SGE:
-			return "greaterThanEqual(" + Op0 + ", " + Op1 + ")";
-		case COMPARE::FUNCTION_SGT:
-			return "greaterThan(" + Op0 + ", " + Op1 + ")";
-		case COMPARE::FUNCTION_SLE:
-			return "lessThanEqual(" + Op0 + ", " + Op1 + ")";
-		case COMPARE::FUNCTION_SLT:
-			return "lessThan(" + Op0 + ", " + Op1 + ")";
-		case COMPARE::FUNCTION_SNE:
-			return "notEqual(" + Op0 + ", " + Op1 + ")";
-		}
-		fmt::throw_exception("Unknown compare function" HERE);
-	}
-
-	void insert_glsl_legacy_function(std::ostream& OS)
-	{
-		OS << "vec4 lit_legacy(vec4 val)";
-		OS << "{\n";
-		OS << "	vec4 clamped_val = val;\n";
-		OS << "	clamped_val.x = max(val.x, 0.);\n";
-		OS << "	clamped_val.y = max(val.y, 0.);\n";
-		OS << "	vec4 result;\n";
-		OS << "	result.x = 1.;\n";
-		OS << "	result.w = 1.;\n";
-		OS << "	result.y = clamped_val.x;\n";
-		OS << "	result.z = clamped_val.x > 0. ? exp(clamped_val.w * log(max(clamped_val.y, 1.E-10))) : 0.;\n";
-		OS << "	return result;\n";
-		OS << "}\n\n";
-
-		OS << "vec4 decodeLinearDepth(float depth_value)\n";
-		OS << "{\n";
-		OS << "	uint value = uint(depth_value * 16777215);\n";
-		OS << "	uint b = (value & 0xff);\n";
-		OS << "	uint g = (value >> 8) & 0xff;\n";
-		OS << "	uint r = (value >> 16) & 0xff;\n";
-		OS << "	return vec4(float(r)/255., float(g)/255., float(b)/255., 1.);\n";
-		OS << "}\n\n";
-
-		OS << "vec4 texture2DReconstruct(sampler2D tex, vec2 coord)\n";
-		OS << "{\n";
-		OS << "	return decodeLinearDepth(texture(tex, coord.xy).r);\n";
-		OS << "}\n\n";
-
-		OS << "vec4 texture2DReconstruct(sampler2DRect tex, vec2 coord)\n";
-		OS << "{\n";
-		OS << "	return decodeLinearDepth(texture(tex, coord.xy).r);\n";
-		OS << "}\n\n";
 	}
 
 	void init_default_resources(TBuiltInResource &rsc)
@@ -156,7 +86,7 @@ namespace vk
 		rsc.maxFragmentUniformVectors = 16;
 		rsc.maxVertexOutputVectors = 16;
 		rsc.maxFragmentInputVectors = 15;
-		rsc.maxProgramTexelOffset = -8;
+		rsc.minProgramTexelOffset = -8;
 		rsc.maxProgramTexelOffset = 7;
 		rsc.maxClipDistances = 8;
 		rsc.maxComputeWorkGroupCountX = 65535;
@@ -267,24 +197,20 @@ namespace vk
 		fmt::throw_exception("Unknown register name: %s" HERE, name);
 	}
 
-	bool compile_glsl_to_spv(std::string& shader, glsl::program_domain domain, std::vector<u32>& spv)
+	bool compile_glsl_to_spv(std::string& shader, program_domain domain, std::vector<u32>& spv)
 	{
-		EShLanguage lang = (domain == glsl::glsl_fragment_program) ? EShLangFragment : EShLangVertex;
+		EShLanguage lang = (domain == glsl_fragment_program) ? EShLangFragment : EShLangVertex;
 
-		glslang::InitializeProcess();
 		glslang::TProgram program;
 		glslang::TShader shader_object(lang);
 		
 		bool success = false;
 		const char *shader_text = shader.data();
-		
-		TBuiltInResource rsc;
-		init_default_resources(rsc);
 
 		shader_object.setStrings(&shader_text, 1);
 
 		EShMessages msg = (EShMessages)(EShMsgVulkanRules | EShMsgSpvRules);
-		if (shader_object.parse(&rsc, 400, EProfile::ECoreProfile, false, true, msg))
+		if (shader_object.parse(&g_default_config, 400, EProfile::ECoreProfile, false, true, msg))
 		{
 			program.addShader(&shader_object);
 			success = program.link(EShMsgVulkanRules);
@@ -300,7 +226,17 @@ namespace vk
 			LOG_ERROR(RSX, "%s", shader_object.getInfoDebugLog());
 		}
 
-		glslang::FinalizeProcess();
 		return success;
+	}
+
+	void initialize_compiler_context()
+	{
+		glslang::InitializeProcess();
+		init_default_resources(g_default_config);
+	}
+
+	void finalize_compiler_context()
+	{
+		glslang::FinalizeProcess();
 	}
 }

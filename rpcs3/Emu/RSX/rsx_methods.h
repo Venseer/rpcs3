@@ -28,6 +28,8 @@ namespace rsx
 		primitive_type primitive;
 		draw_command command;
 
+		bool is_immediate_draw;
+
 		std::vector<u32> inline_vertex_array;
 
 		/**
@@ -153,12 +155,13 @@ namespace rsx
 
 		/**
 		* RSX can sources vertex attributes from 2 places:
-		* - Immediate values passed by NV4097_SET_VERTEX_DATA*_M + ARRAY_ID write.
+		* 1. Immediate values passed by NV4097_SET_VERTEX_DATA*_M + ARRAY_ID write.
 		* For a given ARRAY_ID the last command of this type defines the actual type of the immediate value.
-		* Since there can be only a single value per ARRAY_ID passed this way, all vertex in the draw call
+		* If there is only a single value on an ARRAY_ID passed this way, all vertex in the draw call
 		* shares it.
-		* - Vertex array values passed by offset/stride/size/format description.
+		* Immediate mode rendering uses this method as well to upload vertex data.
 		*
+		* 2. Vertex array values passed by offset/stride/size/format description.
 		* A given ARRAY_ID can have both an immediate value and a vertex array enabled at the same time
 		* (See After Burner Climax intro cutscene). In such case the vertex array has precedence over the
 		* immediate value. As soon as the vertex array is disabled (size set to 0) the immediate value
@@ -286,9 +289,9 @@ namespace rsx
 			return decode<NV4097_SET_RESTART_INDEX>().restart_index();
 		}
 
-		u32 z_clear_value() const
+		u32 z_clear_value(bool is_depth_stencil) const
 		{
-			return decode<NV4097_SET_ZSTENCIL_CLEAR_VALUE>().clear_z();
+			return decode<NV4097_SET_ZSTENCIL_CLEAR_VALUE>().clear_z(is_depth_stencil);
 		}
 
 		u8 stencil_clear_value() const
@@ -373,12 +376,24 @@ namespace rsx
 
 		f32 clip_min() const
 		{
-			return decode<NV4097_SET_CLIP_MIN>().clip_min();
+			f32 depth_min = decode<NV4097_SET_CLIP_MIN>().clip_min();
+
+			//Clamp to [0, 1]
+			if (depth_min < 0.f) return 0.f;
+			if (depth_min > 1.f) return 1.f;
+
+			return depth_min;
 		}
 
 		f32 clip_max() const
 		{
-			return decode<NV4097_SET_CLIP_MAX>().clip_max();
+			f32 depth_max = decode<NV4097_SET_CLIP_MAX>().clip_max();
+
+			//Clamp to [0, 1]
+			if (depth_max < 0.f) return 0.f;
+			if (depth_max > 1.f) return 1.f;
+
+			return depth_max;
 		}
 
 		bool logic_op_enabled() const
@@ -884,6 +899,11 @@ namespace rsx
 		primitive_type primitive_mode() const
 		{
 			return decode<NV4097_SET_BEGIN_END>().primitive();
+		}
+
+		u32 semaphore_context_dma_406e() const
+		{
+			return decode<NV406E_SET_CONTEXT_DMA_SEMAPHORE>().context_dma();
 		}
 
 		u32 semaphore_offset_406e() const

@@ -36,7 +36,7 @@ public:
 	draw_context_t new_context();
 
 	virtual void set_current(draw_context_t ctx) = 0;
-	virtual void flip(draw_context_t ctx) = 0;
+	virtual void flip(draw_context_t ctx, bool skip_frame=false) = 0;
 	virtual int client_width() = 0;
 	virtual int client_height() = 0;
 
@@ -47,14 +47,6 @@ protected:
 	virtual void* make_context() = 0;
 };
 
-enum class frame_type
-{
-	Null,
-	OpenGL,
-	DX12,
-	Vulkan
-};
-
 class GSRender : public rsx::thread
 {
 protected:
@@ -62,7 +54,7 @@ protected:
 	draw_context_t m_context;
 
 public:
-	GSRender(frame_type type);
+	GSRender();
 	virtual ~GSRender();
 
 	void on_init_rsx() override;

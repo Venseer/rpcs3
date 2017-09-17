@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 namespace vm { using namespace ps3; }
 
@@ -38,7 +38,7 @@ enum
 	CELL_SYSUTIL_SYSTEMPARAM_ID_CURRENT_USERNAME                = 0x0131,
 };
 
-enum
+enum CellSysutilLang : s32
 {
 	CELL_SYSUTIL_LANG_JAPANESE       = 0,
 	CELL_SYSUTIL_LANG_ENGLISH_US     = 1,

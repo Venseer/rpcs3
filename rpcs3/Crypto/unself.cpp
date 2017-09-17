@@ -5,7 +5,7 @@
 #include "unself.h"
 #include "Emu/VFS.h"
 
-// TODO: Still reliant on wxWidgets for zlib functions. Alternative solutions?
+#include <algorithm>
 #include <zlib.h>
 
 inline u8 Read8(const fs::file& f)
@@ -1081,16 +1081,9 @@ bool SELFDecrypter::DecryptNPDRM(u8 *metadata, u32 metadata_size)
 	// If not, the data has no NPDRM layer.
 	if (!ctrl)
 	{
-		LOG_WARNING(LOADER, "SELF: No NPDRM control info found!");
+		LOG_NOTICE(LOADER, "SELF: No NPDRM control info found!");
 		return true;
 	}
-
-	u8 klicensee_key[0x10];
-	memcpy(klicensee_key, key_v.GetKlicenseeKey(), 0x10);
-
-	// Use klicensee if available.
-	if (klicensee_key != NULL)
-		memcpy(npdrm_key, klicensee_key, 0x10);
 
 	if (ctrl->npdrm.license == 1)  // Network license.
 	{
@@ -1108,8 +1101,11 @@ bool SELFDecrypter::DecryptNPDRM(u8 *metadata, u32 metadata_size)
 	}
 	else if (ctrl->npdrm.license == 3)  // Free license.
 	{
-		// Use the NP_KLIC_FREE.
-		memcpy(npdrm_key, NP_KLIC_FREE, 0x10);
+		// Use klicensee if available.
+		if (key_v.GetKlicenseeKey() != nullptr)
+			memcpy(npdrm_key, key_v.GetKlicenseeKey(), 0x10);
+		else 
+			memcpy(npdrm_key, NP_KLIC_FREE, 0x10);
 	}
 	else
 	{
@@ -1131,7 +1127,7 @@ bool SELFDecrypter::DecryptNPDRM(u8 *metadata, u32 metadata_size)
 	return true;
 }
 
-bool SELFDecrypter::LoadMetadata()
+bool SELFDecrypter::LoadMetadata(u8* klic_key)
 {
 	aes_context aes;
 	u32 metadata_info_size = SIZE_32(meta_info);
@@ -1149,6 +1145,10 @@ bool SELFDecrypter::LoadMetadata()
 
 	// Find the right keyset from the key vault.
 	SELF_KEY keyset = key_v.FindSelfKey(app_info.self_type, sce_hdr.se_flags, app_info.version);
+
+	// Set klic if given
+	if (klic_key)
+		key_v.SetKlicenseeKey(klic_key);
 
 	// Copy the necessary parameters.
 	u8 metadata_key[0x20];
@@ -1333,9 +1333,6 @@ fs::file SELFDecrypter::MakeElf(bool isElf32)
 				// Decompress if necessary.
 				if (meta_shdr[i].compressed == 2)
 				{
-					/// Removed all wxWidget dependent code. Replaced with zlib functions.
-					/// Also changed local mallocs to unique_ptrs.
-
 					// Store the length in writeable memory space.
 					std::unique_ptr<uLongf> decomp_buf_length(new uLongf);
 					memcpy(decomp_buf_length.get(), &phdr64_arr[meta_shdr[i].program_idx].p_filesz, sizeof(uLongf));
@@ -1480,7 +1477,7 @@ static bool CheckDebugSelf(fs::file& s)
 	return false;
 }
 
-extern fs::file decrypt_self(fs::file elf_or_self)
+extern fs::file decrypt_self(fs::file elf_or_self, u8* klic_key)
 {	
 	if (!elf_or_self) 
 	{
@@ -1506,7 +1503,7 @@ extern fs::file decrypt_self(fs::file elf_or_self)
 		}
 		
 		// Load and decrypt the SELF file metadata.
-		if (!self_dec.LoadMetadata())
+		if (!self_dec.LoadMetadata(klic_key))
 		{
 			LOG_ERROR(LOADER, "SELF: Failed to load SELF file metadata!");
 			return fs::file{};
@@ -1524,4 +1521,43 @@ extern fs::file decrypt_self(fs::file elf_or_self)
 	}
 
 	return elf_or_self;
+}
+
+extern bool verify_npdrm_self_headers(const fs::file& self, u8* klic_key)
+{
+	if (!self)
+		return false;
+
+	self.seek(0);
+
+	if (self.size() >= 4 && self.read<u32>() == "SCE\0"_u32)
+	{
+		// Check the ELF file class (32 or 64 bit).
+		bool isElf32 = IsSelfElf32(self);
+
+		// Start the decrypter on this SELF file.
+		SELFDecrypter self_dec(self);
+
+		// Load the SELF file headers.
+		if (!self_dec.LoadHeaders(isElf32))
+		{
+			LOG_ERROR(LOADER, "SELF: Failed to load SELF file headers!");
+			return false;
+		}
+
+		// Load and decrypt the SELF file metadata.
+		if (!self_dec.LoadMetadata(klic_key))
+		{
+			LOG_ERROR(LOADER, "SELF: Failed to load SELF file metadata!");
+			return false;
+		}
+	}
+	return true;
+}
+
+std::array<u8, 0x10> get_default_self_klic()
+{
+	std::array<u8, 0x10> key;
+	std::copy(std::begin(NP_KLIC_FREE), std::end(NP_KLIC_FREE), std::begin(key));
+	return key;
 }

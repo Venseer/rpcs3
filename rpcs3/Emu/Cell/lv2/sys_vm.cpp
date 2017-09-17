@@ -4,7 +4,7 @@
 
 namespace vm { using namespace ps3; }
 
-logs::channel sys_vm("sys_vm", logs::level::notice);
+logs::channel sys_vm("sys_vm");
 
 error_code sys_vm_memory_map(u32 vsize, u32 psize, u32 cid, u64 flag, u64 policy, vm::ptr<u32> addr)
 {
@@ -36,6 +36,14 @@ error_code sys_vm_memory_map(u32 vsize, u32 psize, u32 cid, u64 flag, u64 policy
 	}
 
 	return CELL_ENOMEM;
+}
+
+error_code sys_vm_memory_map_different(u32 vsize, u32 psize, u32 cid, u64 flag, u64 policy, vm::ptr<u32> addr)
+{
+	sys_vm.warning("sys_vm_memory_map_different(vsize=0x%x, psize=0x%x, cid=0x%x, flags=0x%llx, policy=0x%llx, addr=*0x%x)", vsize, psize, cid, flag, policy, addr);
+	// TODO: if needed implement different way to map memory, unconfirmed.
+
+	return sys_vm_memory_map(vsize, psize, cid, flag, policy, addr);
 }
 
 error_code sys_vm_unmap(u32 addr)

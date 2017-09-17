@@ -20,7 +20,7 @@ extern "C"
 
 std::mutex g_mutex_avcodec_open2;
 
-logs::channel cellVdec("cellVdec", logs::level::notice);
+logs::channel cellVdec("cellVdec");
 
 vm::gvar<s32> _cell_vdec_prx_ver; // ???
 
@@ -77,7 +77,7 @@ struct vdec_thread : ppu_thread
 
 	std::mutex mutex;
 	std::queue<vdec_frame> out;
-	u32 max_frames = 20;
+	u32 max_frames = 60;
 
 	vdec_thread(s32 type, u32 profile, u32 addr, u32 size, vm::ptr<CellVdecCbMsg> func, u32 arg, u32 prio, u32 stack)
 		: ppu_thread("HLE Video Decoder", prio, stack)
@@ -295,6 +295,14 @@ struct vdec_thread : ppu_thread
 							next_pts += amend;
 							next_dts += amend;
 							frame.frc = frc_set;
+						}
+						else if (ctx->time_base.num == 0)
+						{
+							// Hack
+							const u64 amend = u64{90000} / 30;
+							frame.frc = CELL_VDEC_FRC_30;
+							next_pts += amend;
+							next_dts += amend;
 						}
 						else
 						{

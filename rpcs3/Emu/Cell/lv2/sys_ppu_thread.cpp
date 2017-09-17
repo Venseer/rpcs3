@@ -6,10 +6,11 @@
 #include "Emu/Cell/ErrorCodes.h"
 #include "Emu/Cell/PPUThread.h"
 #include "sys_ppu_thread.h"
+#include "sys_event.h"
 
 namespace vm { using namespace ps3; }
 
-logs::channel sys_ppu_thread("sys_ppu_thread", logs::level::notice);
+logs::channel sys_ppu_thread("sys_ppu_thread");
 
 void _sys_ppu_thread_exit(ppu_thread& ppu, u64 errorcode)
 {
@@ -54,12 +55,6 @@ void _sys_ppu_thread_exit(ppu_thread& ppu, u64 errorcode)
 
 	// Remove suspend state (TODO)
 	ppu.state -= cpu_flag::suspend;
-
-	// Throw if this syscall was not called directly by the SC instruction (hack)
-	if (ppu.lr == 0 || ppu.gpr[11] != 41)
-	{
-		throw cpu_flag::exit;
-	}
 }
 
 void sys_ppu_thread_yield(ppu_thread& ppu)
@@ -352,6 +347,22 @@ error_code sys_ppu_thread_start(ppu_thread& ppu, u32 thread_id)
 	else
 	{
 		thread->notify();
+
+		// Dirty hack for sound: confirm the creation of _mxr000 event queue
+		if (thread->m_name == "_cellsurMixerMain")
+		{
+			lv2_obj::sleep(ppu);
+
+			while (!idm::select<lv2_obj, lv2_event_queue>([](u32, lv2_event_queue& eq)
+			{
+				return eq.name == "_mxr000\0"_u64;
+			}))
+			{
+				thread_ctrl::wait_for(50000);
+			}
+
+			ppu.test_state();
+		}
 	}
 
 	return CELL_OK;

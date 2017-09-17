@@ -18,6 +18,11 @@ enum class ppu_cmd : u32
 	sleep,
 };
 
+// Formatting helper
+enum class ppu_syscall_code : u64
+{
+};
+
 class ppu_thread : public cpu_thread
 {
 public:
@@ -38,7 +43,24 @@ public:
 	f64 fpr[32] = {}; // Floating Point Registers
 	v128 vr[32] = {}; // Vector Registers
 
-	alignas(16) bool cr[32] = {}; // Condition Registers (abstract representation)
+	alignas(16) bool cr[32] = {}; // Condition Registers (unpacked)
+
+	alignas(16) struct // Floating-Point Status and Control Register (unpacked)
+	{
+		// TODO
+		bool _start[16]{};
+		bool fl{}; // FPCC.FL
+		bool fg{}; // FPCC.FG
+		bool fe{}; // FPCC.FE
+		bool fu{}; // FPCC.FU
+		bool _end[12]{};
+	}
+	fpscr;
+
+	u64 lr{}; // Link Register
+	u64 ctr{}; // Counter Register
+	u32 vrsave{0xffffffff}; // VR Save Register
+	u32 cia{}; // Current Instruction Address
 
 	// Pack CR bits
 	u32 cr_pack() const
@@ -106,23 +128,10 @@ public:
 	*/
 	bool nj = true;
 
-	struct // Floating-Point Status and Control Register (abstract representation)
-	{
-		bool fl{}; // FPCC.FL
-		bool fg{}; // FPCC.FG
-		bool fe{}; // FPCC.FE
-		bool fu{}; // FPCC.FU
-	}
-	fpscr;
-
 	u32 raddr{0}; // Reservation addr
 	u64 rtime{0};
 	u64 rdata{0}; // Reservation data
-	u64 lr{}; // Link Register
-	u64 ctr{}; // Counter Register
-	u32 vrsave{0xffffffff}; // VR Save Register (almost unused)
-
-	u32 cia{}; // Current Instruction Address
+	
 	atomic_t<u32> prio{0}; // Thread priority (0..3071)
 	const u32 stack_size; // Stack size
 	const u32 stack_addr; // Stack address
@@ -141,18 +150,6 @@ public:
 	const char* last_function{}; // Last function name for diagnosis, optimized for speed.
 
 	const std::string m_name; // Thread name
-
-	u64 get_next_arg(u32& g_count)
-	{
-		if (g_count < 8)
-		{
-			return gpr[g_count++ + 3];
-		}
-		else
-		{
-			return *get_stack_arg(++g_count);
-		}
-	}
 
 	be_t<u64>* get_stack_arg(s32 i, u64 align = alignof(u64));
 	void exec_task();

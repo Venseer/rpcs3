@@ -222,21 +222,19 @@ struct RSXFragmentProgram
 	u32 ctrl;
 	u16 unnormalized_coords;
 	u16 redirected_textures;
-	rsx::comparison_function alpha_func;
+	u16 shadow_textures;
 	bool front_back_color_enabled : 1;
 	bool back_color_diffuse_output : 1;
 	bool back_color_specular_output : 1;
 	bool front_color_diffuse_output : 1;
 	bool front_color_specular_output : 1;
 	u32 texture_dimensions;
-	rsx::window_origin origin_mode;
-	rsx::window_pixel_center pixel_center_mode;
-	rsx::fog_mode fog_equation;
-	u16 height;
 
 	float texture_pitch_scale[16];
 	u8 textures_alpha_kill[16];
-	u32 textures_zfunc[16];
+	u8 textures_zfunc[16];
+
+	bool valid;
 
 	rsx::texture_dimension_extended get_texture_dimension(u8 id) const
 	{
@@ -256,12 +254,7 @@ struct RSXFragmentProgram
 	}
 
 	RSXFragmentProgram()
-		: size(0)
-		, addr(0)
-		, offset(0)
-		, ctrl(0)
-		, unnormalized_coords(0)
-		, texture_dimensions(0)
 	{
+		memset(this, 0, sizeof(RSXFragmentProgram));
 	}
 };

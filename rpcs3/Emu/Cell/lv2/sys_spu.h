@@ -88,7 +88,7 @@ struct sys_spu_segment
 {
 	be_t<s32> type; // copy, fill, info
 	be_t<u32> ls; // local storage address
-	be_t<s32> size;
+	be_t<u32> size;
 
 	union
 	{
@@ -105,26 +105,105 @@ enum : u32
 	SYS_SPU_IMAGE_TYPE_KERNEL = 1,
 };
 
-struct sys_spu_image_t
+struct sys_spu_image
 {
 	be_t<u32> type; // user, kernel
 	be_t<u32> entry_point;
 	vm::ps3::bptr<sys_spu_segment> segs;
 	be_t<s32> nsegs;
+
+	template <bool CountInfo = true, typename Phdrs>
+	static s32 get_nsegs(const Phdrs& phdrs)
+	{
+		s32 num_segs = 0;
+
+		for (const auto& phdr : phdrs)
+		{
+			if (phdr.p_type != 1 && phdr.p_type != 4)
+			{
+				return -1;
+			}
+
+			if (phdr.p_type == 1 && phdr.p_filesz != phdr.p_memsz && phdr.p_filesz)
+			{
+				num_segs += 2;
+			}
+			else if (phdr.p_type == 1 || CountInfo)
+			{
+				num_segs += 1;
+			}
+		}
+
+		return num_segs;
+	}
+
+	template <bool WriteInfo = true, typename Phdrs>
+	static s32 fill(vm::ps3::ptr<sys_spu_segment> segs, s32 nsegs, const Phdrs& phdrs, u32 src)
+	{
+		s32 num_segs = 0;
+
+		for (const auto& phdr : phdrs)
+		{
+			if (phdr.p_type == 1)
+			{
+				if (phdr.p_filesz)
+				{
+					if (num_segs >= nsegs)
+					{
+						return -2;
+					}
+
+					auto* seg = &segs[num_segs++];
+					seg->type = SYS_SPU_SEGMENT_TYPE_COPY;
+					seg->ls   = static_cast<u32>(phdr.p_vaddr);
+					seg->size = static_cast<u32>(phdr.p_filesz);
+					seg->addr = static_cast<u32>(phdr.p_offset + src);
+				}
+
+				if (phdr.p_memsz > phdr.p_filesz)
+				{
+					if (num_segs >= nsegs)
+					{
+						return -2;
+					}
+
+					auto* seg = &segs[num_segs++];
+					seg->type = SYS_SPU_SEGMENT_TYPE_FILL;
+					seg->ls   = static_cast<u32>(phdr.p_vaddr + phdr.p_filesz);
+					seg->size = static_cast<u32>(phdr.p_memsz - phdr.p_filesz);
+					seg->addr = 0;
+				}
+			}
+			else if (WriteInfo && phdr.p_type == 4)
+			{
+				if (num_segs >= nsegs)
+				{
+					return -2;
+				}
+
+				auto* seg = &segs[num_segs++];
+				seg->type = SYS_SPU_SEGMENT_TYPE_INFO;
+				seg->size = 0x20;
+				seg->addr = static_cast<u32>(phdr.p_offset + 0x14 + src);
+			}
+			else if (phdr.p_type != 4)
+			{
+				return -1;
+			}
+		}
+
+		return num_segs;
+	}
+
+	void load(const fs::file& stream);
+	void free();
+	static void deploy(u32 loc, sys_spu_segment* segs, u32 nsegs);
 };
 
 enum : u32
 {
 	SYS_SPU_IMAGE_PROTECT = 0,
 	SYS_SPU_IMAGE_DIRECT  = 1,
-};
-
-struct spu_arg_t
-{
-	u64 arg1;
-	u64 arg2;
-	u64 arg3;
-	u64 arg4;
 };
 
 // SPU Thread Group Join State Flag
@@ -157,8 +236,8 @@ struct lv2_spu_group
 	cond_variable cv; // used to signal waiting PPU thread
 
 	std::array<std::shared_ptr<SPUThread>, 256> threads; // SPU Threads
-	std::array<vm::ps3::ptr<sys_spu_image_t>, 256> images; // SPU Images
-	std::array<spu_arg_t, 256> args; // SPU Thread Arguments
+	std::array<std::pair<sys_spu_image, std::vector<sys_spu_segment>>, 256> imgs; // SPU Images
+	std::array<std::array<u64, 4>, 256> args; // SPU Thread Arguments
 
 	std::weak_ptr<lv2_event_queue> ep_run; // port for SYS_SPU_THREAD_GROUP_EVENT_RUN events
 	std::weak_ptr<lv2_event_queue> ep_exception; // TODO: SYS_SPU_THREAD_GROUP_EVENT_EXCEPTION
@@ -204,24 +283,26 @@ struct lv2_spu_group
 
 class ppu_thread;
 
-// Aux
-void LoadSpuImage(const fs::file& stream, u32& spu_ep, u32 addr);
-u32 LoadSpuImage(const fs::file& stream, u32& spu_ep);
-
 // Syscalls
 
 error_code sys_spu_initialize(u32 max_usable_spu, u32 max_raw_spu);
-error_code sys_spu_image_open(vm::ps3::ptr<sys_spu_image_t> img, vm::ps3::cptr<char> path);
-error_code sys_spu_thread_initialize(vm::ps3::ptr<u32> thread, u32 group, u32 spu_num, vm::ps3::ptr<sys_spu_image_t>, vm::ps3::ptr<sys_spu_thread_attribute>, vm::ps3::ptr<sys_spu_thread_argument>);
+error_code _sys_spu_image_get_information(vm::ps3::ptr<sys_spu_image> img, vm::ps3::ptr<u32> entry_point, vm::ps3::ptr<s32> nsegs);
+error_code sys_spu_image_open(vm::ps3::ptr<sys_spu_image> img, vm::ps3::cptr<char> path);
+error_code _sys_spu_image_import(vm::ps3::ptr<sys_spu_image> img, u32 src, u32 size, u32 arg4);
+error_code _sys_spu_image_close(vm::ps3::ptr<sys_spu_image> img);
+error_code _sys_spu_image_get_segments(vm::ps3::ptr<sys_spu_image> img, vm::ps3::ptr<sys_spu_segment> segments, s32 nseg);
+error_code sys_spu_thread_initialize(vm::ps3::ptr<u32> thread, u32 group, u32 spu_num, vm::ps3::ptr<sys_spu_image>, vm::ps3::ptr<sys_spu_thread_attribute>, vm::ps3::ptr<sys_spu_thread_argument>);
 error_code sys_spu_thread_set_argument(u32 id, vm::ps3::ptr<sys_spu_thread_argument> arg);
 error_code sys_spu_thread_group_create(vm::ps3::ptr<u32> id, u32 num, s32 prio, vm::ps3::ptr<sys_spu_thread_group_attribute> attr);
 error_code sys_spu_thread_group_destroy(u32 id);
 error_code sys_spu_thread_group_start(ppu_thread&, u32 id);
 error_code sys_spu_thread_group_suspend(u32 id);
 error_code sys_spu_thread_group_resume(u32 id);
-error_code sys_spu_thread_group_yield(u32 id);	
+error_code sys_spu_thread_group_yield(u32 id);
 error_code sys_spu_thread_group_terminate(u32 id, s32 value);
 error_code sys_spu_thread_group_join(ppu_thread&, u32 id, vm::ps3::ptr<u32> cause, vm::ps3::ptr<u32> status);
+error_code sys_spu_thread_group_set_priority(u32 id, s32 priority);
+error_code sys_spu_thread_group_get_priority(u32 id, vm::ps3::ptr<s32> priority);
 error_code sys_spu_thread_group_connect_event(u32 id, u32 eq, u32 et);
 error_code sys_spu_thread_group_disconnect_event(u32 id, u32 et);
 error_code sys_spu_thread_group_connect_event_all_threads(u32 id, u32 eq_id, u64 req, vm::ps3::ptr<u8> spup);

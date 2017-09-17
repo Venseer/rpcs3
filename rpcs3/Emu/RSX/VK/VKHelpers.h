@@ -8,13 +8,19 @@
 #include <memory>
 #include <unordered_map>
 
-#include "Utilities/Config.h"
+#ifdef __linux__
+#include <X11/Xlib.h>
+#endif
+
+#include "Emu/System.h"
 #include "VulkanAPI.h"
 #include "../GCM.h"
 #include "../Common/TextureUtils.h"
 #include "../Common/ring_buffer_helper.h"
+#include "../Common/GLSLCommon.h"
+#include "../rsx_cache.h"
 
-#define DESCRIPTOR_MAX_DRAW_CALLS 1024
+#define DESCRIPTOR_MAX_DRAW_CALLS 4096
 
 #define VERTEX_BUFFERS_FIRST_BIND_SLOT 3
 #define FRAGMENT_CONSTANT_BUFFERS_BIND_SLOT 2
@@ -23,8 +29,6 @@
 #define TEXTURES_FIRST_BIND_SLOT 19
 #define VERTEX_TEXTURES_FIRST_BIND_SLOT 35 //19+16
 
-extern cfg::bool_entry g_cfg_rsx_debug_output;
-
 namespace rsx
 {
 	class fragment_texture;
@@ -32,7 +36,7 @@ namespace rsx
 
 namespace vk
 {
-#define CHECK_RESULT(expr) do { VkResult _res = (expr); if (_res != VK_SUCCESS) fmt::throw_exception("Assertion failed! Result is %Xh", (s32)_res); } while (0)
+#define CHECK_RESULT(expr) { VkResult _res = (expr); if (_res != VK_SUCCESS) fmt::throw_exception("Assertion failed! Result is %Xh" HERE, (s32)_res); }
 
 	VKAPI_ATTR void *VKAPI_CALL mem_realloc(void *pUserData, void *pOriginal, size_t size, size_t alignment, VkSystemAllocationScope allocationScope);
 	VKAPI_ATTR void *VKAPI_CALL mem_alloc(void *pUserData, size_t size, size_t alignment, VkSystemAllocationScope allocationScope);
@@ -54,6 +58,7 @@ namespace vk
 	class swap_chain_image;
 	class physical_device;
 	class command_buffer;
+	struct image;
 
 	vk::context *get_current_thread_ctx();
 	void set_current_thread_ctx(const vk::context &ctx);
@@ -71,12 +76,17 @@ namespace vk
 	void destroy_global_resources();
 
 	void change_image_layout(VkCommandBuffer cmd, VkImage image, VkImageLayout current_layout, VkImageLayout new_layout, VkImageSubresourceRange range);
+	void change_image_layout(VkCommandBuffer cmd, vk::image *image, VkImageLayout new_layout, VkImageSubresourceRange range);
 	void copy_image(VkCommandBuffer cmd, VkImage &src, VkImage &dst, VkImageLayout srcLayout, VkImageLayout dstLayout, u32 width, u32 height, u32 mipmaps, VkImageAspectFlagBits aspect);
 	void copy_scaled_image(VkCommandBuffer cmd, VkImage &src, VkImage &dst, VkImageLayout srcLayout, VkImageLayout dstLayout, u32 src_x_offset, u32 src_y_offset, u32 src_width, u32 src_height, u32 dst_x_offset, u32 dst_y_offset, u32 dst_width, u32 dst_height, u32 mipmaps, VkImageAspectFlagBits aspect);
 
 	VkFormat get_compatible_sampler_format(u32 format);
 	std::pair<VkFormat, VkComponentMapping> get_compatible_surface_format(rsx::surface_color_format color_format);
 	size_t get_render_pass_location(VkFormat color_surface_format, VkFormat depth_stencil_format, u8 color_surface_count);
+
+	void enter_uninterruptible();
+	void leave_uninterruptible();
+	bool is_uninterruptible();
 
 	struct memory_type_mapping
 	{
@@ -180,8 +190,18 @@ namespace vk
 
 			std::vector<const char *> layers;
 
-			if (g_cfg_rsx_debug_output)
+			if (g_cfg.video.debug_output)
 				layers.push_back("VK_LAYER_LUNARG_standard_validation");
+
+			//Enable hardware features manually
+			//Currently we require:
+			//1. Anisotropic sampling
+			//2. DXT support
+			VkPhysicalDeviceFeatures available_features;
+			vkGetPhysicalDeviceFeatures(*pgpu, &available_features);
+
+			available_features.samplerAnisotropy = VK_TRUE;
+			available_features.textureCompressionBC = VK_TRUE;
 
 			VkDeviceCreateInfo device = {};
 			device.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
@@ -192,7 +212,7 @@ namespace vk
 			device.ppEnabledLayerNames = layers.data();
 			device.enabledExtensionCount = 1;
 			device.ppEnabledExtensionNames = requested_extensions;
-			device.pEnabledFeatures = nullptr;
+			device.pEnabledFeatures = &available_features;
 
 			CHECK_RESULT(vkCreateDevice(*pgpu, &device, nullptr, &dev));
 		}
@@ -342,7 +362,8 @@ namespace vk
 	struct image
 	{
 		VkImage value;
-		VkComponentMapping native_layout = {VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A};
+		VkComponentMapping native_component_map = {VK_COMPONENT_SWIZZLE_R, VK_COMPONENT_SWIZZLE_G, VK_COMPONENT_SWIZZLE_B, VK_COMPONENT_SWIZZLE_A};
+		VkImageLayout current_layout = VK_IMAGE_LAYOUT_UNDEFINED;
 		VkImageCreateInfo info = {};
 		std::shared_ptr<vk::memory_block> memory;
 
@@ -399,6 +420,21 @@ namespace vk
 
 		image(const image&) = delete;
 		image(image&&) = delete;
+
+		u32 width() const
+		{
+			return info.extent.width;
+		}
+
+		u32 height() const
+		{
+			return info.extent.height;
+		}
+
+		u32 depth() const
+		{
+			return info.extent.depth;
+		}
 
 	private:
 		VkDevice m_device;
@@ -576,7 +612,8 @@ namespace vk
 
 		sampler(VkDevice dev, VkSamplerAddressMode clamp_u, VkSamplerAddressMode clamp_v, VkSamplerAddressMode clamp_w,
 			bool unnormalized_coordinates, float mipLodBias, float max_anisotropy, float min_lod, float max_lod,
-			VkFilter min_filter, VkFilter mag_filter, VkSamplerMipmapMode mipmap_mode, VkBorderColor border_color)
+			VkFilter min_filter, VkFilter mag_filter, VkSamplerMipmapMode mipmap_mode, VkBorderColor border_color,
+			VkBool32 depth_compare = false, VkCompareOp depth_compare_mode = VK_COMPARE_OP_NEVER)
 			: m_device(dev)
 		{
 			VkSamplerCreateInfo info = {};
@@ -585,7 +622,7 @@ namespace vk
 			info.addressModeV = clamp_v;
 			info.addressModeW = clamp_w;
 			info.anisotropyEnable = VK_TRUE;
-			info.compareEnable = VK_FALSE;
+			info.compareEnable = depth_compare;
 			info.unnormalizedCoordinates = unnormalized_coordinates;
 			info.mipLodBias = mipLodBias;
 			info.maxAnisotropy = max_anisotropy;
@@ -594,7 +631,7 @@ namespace vk
 			info.magFilter = mag_filter;
 			info.minFilter = min_filter;
 			info.mipmapMode = mipmap_mode;
-			info.compareOp = VK_COMPARE_OP_NEVER;
+			info.compareOp = depth_compare_mode;
 			info.borderColor = border_color;
 
 			CHECK_RESULT(vkCreateSampler(m_device, &info, nullptr, &value));
@@ -615,17 +652,17 @@ namespace vk
 	{
 		VkFramebuffer value;
 		VkFramebufferCreateInfo info = {};
-		std::vector<std::unique_ptr<vk::image_view>> attachements;
+		std::vector<std::unique_ptr<vk::image_view>> attachments;
 		u32 m_width = 0;
 		u32 m_height = 0;
 
 	public:
 		framebuffer(VkDevice dev, VkRenderPass pass, u32 width, u32 height, std::vector<std::unique_ptr<vk::image_view>> &&atts)
-			: m_device(dev), attachements(std::move(atts))
+			: m_device(dev), attachments(std::move(atts))
 		{
-			std::vector<VkImageView> image_view_array(attachements.size());
+			std::vector<VkImageView> image_view_array(attachments.size());
 			size_t i = 0;
-			for (const auto &att : attachements)
+			for (const auto &att : attachments)
 			{
 				image_view_array[i++] = att->value;
 			}
@@ -657,6 +694,24 @@ namespace vk
 		u32 height()
 		{
 			return m_height;
+		}
+
+		bool matches(std::vector<vk::image*> fbo_images, u32 width, u32 height)
+		{
+			if (m_width != width || m_height != height)
+				return false;
+
+			if (fbo_images.size() != attachments.size())
+				return false;
+
+			for (int n = 0; n < fbo_images.size(); ++n)
+			{
+				if (attachments[n]->info.image != fbo_images[n]->value ||
+					attachments[n]->info.format != fbo_images[n]->info.format)
+					return false;
+			}
+
+			return true;
 		}
 
 		framebuffer(const framebuffer&) = delete;
@@ -797,19 +852,13 @@ namespace vk
 		void init_swapchain(u32 width, u32 height)
 		{
 			VkSwapchainKHR old_swapchain = m_vk_swapchain;
-
-			uint32_t num_modes;
 			vk::physical_device& gpu = const_cast<vk::physical_device&>(dev.gpu());
-			CHECK_RESULT(vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, m_surface, &num_modes, NULL));
 
-			std::vector<VkPresentModeKHR> present_mode_descriptors(num_modes);
-			CHECK_RESULT(vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, m_surface, &num_modes, present_mode_descriptors.data()));
-
-			VkSurfaceCapabilitiesKHR surface_descriptors;
+			VkSurfaceCapabilitiesKHR surface_descriptors = {};
 			CHECK_RESULT(vkGetPhysicalDeviceSurfaceCapabilitiesKHR(gpu, m_surface, &surface_descriptors));
 
 			VkExtent2D swapchainExtent;
-			
+
 			if (surface_descriptors.currentExtent.width == (uint32_t)-1)
 			{
 				swapchainExtent.width = width;
@@ -829,7 +878,7 @@ namespace vk
 			CHECK_RESULT(vkGetPhysicalDeviceSurfacePresentModesKHR(gpu, m_surface, &nb_available_modes, present_modes.data()));
 
 			VkPresentModeKHR swapchain_present_mode = VK_PRESENT_MODE_FIFO_KHR;
-			
+
 			for (VkPresentModeKHR mode : present_modes)
 			{
 				if (mode == VK_PRESENT_MODE_MAILBOX_KHR)
@@ -844,13 +893,19 @@ namespace vk
 					(mode == VK_PRESENT_MODE_IMMEDIATE_KHR || mode == VK_PRESENT_MODE_FIFO_RELAXED_KHR))
 					swapchain_present_mode = mode;
 			}
-			
-			uint32_t nb_swap_images = surface_descriptors.minImageCount + 1;
 
-			if ((surface_descriptors.maxImageCount > 0) && (nb_swap_images > surface_descriptors.maxImageCount))
+			uint32_t nb_swap_images = surface_descriptors.minImageCount + 1;
+			if (surface_descriptors.maxImageCount > 0)
 			{
-				// Application must settle for fewer images than desired:
-				nb_swap_images = surface_descriptors.maxImageCount;
+				//Try to negotiate for a triple buffer setup
+				//In cases where the front-buffer isnt available for present, its better to have a spare surface
+				nb_swap_images = std::max(surface_descriptors.minImageCount + 2u, 3u);
+
+				if (nb_swap_images > surface_descriptors.maxImageCount)
+				{
+					// Application must settle for fewer images than desired:
+					nb_swap_images = surface_descriptors.maxImageCount;
+				}
 			}
 
 			VkSurfaceTransformFlagBitsKHR pre_transform = surface_descriptors.currentTransform;
@@ -864,7 +919,7 @@ namespace vk
 			swap_info.imageFormat = m_surface_format;
 			swap_info.imageColorSpace = m_color_space;
 
-			swap_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT|VK_IMAGE_USAGE_TRANSFER_DST_BIT;
+			swap_info.imageUsage = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 			swap_info.preTransform = pre_transform;
 			swap_info.compositeAlpha = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
 			swap_info.imageArrayLayers = 1;
@@ -879,7 +934,17 @@ namespace vk
 			createSwapchainKHR(dev, &swap_info, nullptr, &m_vk_swapchain);
 
 			if (old_swapchain)
+			{
+				if (m_swap_images.size())
+				{
+					for (auto &img : m_swap_images)
+						img.discard(dev);
+
+					m_swap_images.resize(0);
+				}
+
 				destroySwapchainKHR(dev, old_swapchain, nullptr);
+			}
 
 			nb_swap_images = 0;
 			getSwapchainImagesKHR(dev, m_vk_swapchain, &nb_swap_images, nullptr);
@@ -941,7 +1006,7 @@ namespace vk
 		{
 			owner = &dev;
 			VkCommandPoolCreateInfo infos = {};
-			infos.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT;
+			infos.flags = VK_COMMAND_POOL_CREATE_TRANSIENT_BIT | VK_COMMAND_POOL_CREATE_RESET_COMMAND_BUFFER_BIT;
 			infos.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
 
 			CHECK_RESULT(vkCreateCommandPool(dev, &infos, nullptr, &pool));
@@ -969,6 +1034,7 @@ namespace vk
 
 	class command_buffer
 	{
+	protected:
 		vk::command_pool *pool = nullptr;
 		VkCommandBuffer commands = nullptr;
 
@@ -993,6 +1059,11 @@ namespace vk
 			vkFreeCommandBuffers(pool->get_owner(), (*pool), 1, &commands);
 		}
 
+		vk::command_pool& get_command_pool() const
+		{
+			return *pool;
+		}
+
 		operator VkCommandBuffer()
 		{
 			return commands;
@@ -1011,11 +1082,16 @@ namespace vk
 		PFN_vkCreateDebugReportCallbackEXT createDebugReportCallback = nullptr;
 		VkDebugReportCallbackEXT m_debugger = nullptr;
 
+		bool loader_exists = false;
+
 	public:
 
 		context()
 		{
 			m_instance = nullptr;
+
+			//Check that some critical entry-points have been loaded into memory indicating prescence of a loader
+			loader_exists = (&vkCreateInstance != nullptr);
 		}
 
 		~context()
@@ -1045,6 +1121,8 @@ namespace vk
 		
 		void enable_debugging()
 		{
+			if (!g_cfg.video.debug_output) return;
+			 
 			PFN_vkDebugReportCallbackEXT callback = vk::dbgFunc;
 
 			createDebugReportCallback = (PFN_vkCreateDebugReportCallbackEXT)vkGetInstanceProcAddr(m_instance, "vkCreateDebugReportCallbackEXT");
@@ -1058,8 +1136,10 @@ namespace vk
 			CHECK_RESULT(createDebugReportCallback(m_instance, &dbgCreateInfo, NULL, &m_debugger));
 		}
 
-		uint32_t createInstance(const char *app_name)
+		uint32_t createInstance(const char *app_name, bool fast = false)
 		{
+			if (!loader_exists) return 0;
+
 			//Initialize a vulkan instance
 			VkApplicationInfo app = {};
 
@@ -1074,13 +1154,17 @@ namespace vk
 			const char *requested_extensions[] =
 			{
 				"VK_KHR_surface",
+#ifdef _WIN32
 				"VK_KHR_win32_surface",
+#else
+				"VK_KHR_xlib_surface",
+#endif
 				"VK_EXT_debug_report",
 			};
 
 			std::vector<const char *> layers;
 
-			if (g_cfg_rsx_debug_output)
+			if (!fast && g_cfg.video.debug_output)
 				layers.push_back("VK_LAYER_LUNARG_standard_validation");
 
 			VkInstanceCreateInfo instance_info = {};
@@ -1088,11 +1172,12 @@ namespace vk
 			instance_info.pApplicationInfo = &app;
 			instance_info.enabledLayerCount = static_cast<uint32_t>(layers.size());
 			instance_info.ppEnabledLayerNames = layers.data();
-			instance_info.enabledExtensionCount = 3;
-			instance_info.ppEnabledExtensionNames = requested_extensions;
+			instance_info.enabledExtensionCount = fast? 0: 3;
+			instance_info.ppEnabledExtensionNames = fast? nullptr: requested_extensions;
 
 			VkInstance instance;
-			CHECK_RESULT(vkCreateInstance(&instance_info, nullptr, &instance));
+			if (vkCreateInstance(&instance_info, nullptr, &instance) != VK_SUCCESS)
+				return 0;
 
 			m_vk_instances.push_back(instance);
 			return (u32)m_vk_instances.size();
@@ -1129,8 +1214,13 @@ namespace vk
 
 		std::vector<physical_device>& enumerateDevices()
 		{
+			if (!loader_exists)
+				return gpus;
+
 			uint32_t num_gpus;
-			CHECK_RESULT(vkEnumeratePhysicalDevices(m_instance, &num_gpus, nullptr));
+			// This may fail on unsupported drivers, so just assume no devices
+			if (vkEnumeratePhysicalDevices(m_instance, &num_gpus, nullptr) != VK_SUCCESS)
+				return gpus;
 
 			if (gpus.size() != num_gpus)
 			{
@@ -1147,6 +1237,7 @@ namespace vk
 		}
 
 #ifdef _WIN32
+		
 		vk::swap_chain* createSwapChain(HINSTANCE hInstance, HWND hWnd, vk::physical_device &dev)
 		{
 			VkWin32SurfaceCreateInfoKHR createInfo = {};
@@ -1156,6 +1247,18 @@ namespace vk
 
 			VkSurfaceKHR surface;
 			CHECK_RESULT(vkCreateWin32SurfaceKHR(m_instance, &createInfo, NULL, &surface));
+#elif HAVE_VULKAN
+		
+		vk::swap_chain* createSwapChain(Display *display, Window window, vk::physical_device &dev)
+		{
+			VkXlibSurfaceCreateInfoKHR createInfo = {};
+			createInfo.sType = VK_STRUCTURE_TYPE_XLIB_SURFACE_CREATE_INFO_KHR;
+			createInfo.dpy = display;
+			createInfo.window = window;
+			
+			VkSurfaceKHR surface;
+			CHECK_RESULT(vkCreateXlibSurfaceKHR(m_instance, &createInfo, nullptr, &surface));
+#endif
 
 			uint32_t device_queues = dev.get_queue_count();
 			std::vector<VkBool32> supportsPresent(device_queues);
@@ -1226,14 +1329,22 @@ namespace vk
 			{
 				if (!formatCount) fmt::throw_exception("Format count is zero!" HERE);
 				format = surfFormats[0].format;
+
+				//Prefer BGRA8_UNORM to avoid sRGB compression (RADV)
+				for (auto& surface_format: surfFormats)
+				{
+					if (surface_format.format == VK_FORMAT_B8G8R8A8_UNORM)
+					{
+						format = VK_FORMAT_B8G8R8A8_UNORM;
+						break;
+					}
+				}
 			}
 
 			color_space = surfFormats[0].colorSpace;
 
 			return new swap_chain(dev, presentQueueNodeIndex, graphicsQueueNodeIndex, format, surface, color_space);
 		}
-#endif	//if _WIN32
-
 	};
 
 	class descriptor_pool
@@ -1280,12 +1391,6 @@ namespace vk
 
 	namespace glsl
 	{
-		enum program_domain
-		{
-			glsl_vertex_program = 0,
-			glsl_fragment_program = 1
-		};
-
 		enum program_input_type
 		{
 			input_type_uniform_buffer = 0,
@@ -1310,7 +1415,7 @@ namespace vk
 
 		struct program_input
 		{
-			program_domain domain;
+			::glsl::program_domain domain;
 			program_input_type type;
 			
 			bound_buffer as_buffer;
@@ -1326,32 +1431,39 @@ namespace vk
 			VkDevice m_device;
 		public:
 			VkPipeline pipeline;
+			u64 attribute_location_mask;
+			u64 vertex_attributes_mask;
 
 			program(VkDevice dev, VkPipeline p, const std::vector<program_input> &vertex_input, const std::vector<program_input>& fragment_inputs);
 			program(const program&) = delete;
 			program(program&& other) = delete;
 			~program();
 
-			program& load_uniforms(program_domain domain, const std::vector<program_input>& inputs);
+			program& load_uniforms(::glsl::program_domain domain, const std::vector<program_input>& inputs);
 
 			bool has_uniform(std::string uniform_name);
 			void bind_uniform(VkDescriptorImageInfo image_descriptor, std::string uniform_name, VkDescriptorSet &descriptor_set);
 			void bind_uniform(VkDescriptorBufferInfo buffer_descriptor, uint32_t binding_point, VkDescriptorSet &descriptor_set);
 			void bind_uniform(const VkBufferView &buffer_view, const std::string &binding_name, VkDescriptorSet &descriptor_set);
+
+			u64 get_vertex_input_attributes_mask();
 		};
 	}
 
 	struct vk_data_heap : public data_heap
 	{
 		std::unique_ptr<vk::buffer> heap;
+		bool mapped = false;
 
 		void* map(size_t offset, size_t size)
 		{
+			mapped = true;
 			return heap->map(offset, size);
 		}
 
 		void unmap()
 		{
+			mapped = false;
 			heap->unmap();
 		}
 	};
@@ -1362,6 +1474,6 @@ namespace vk
 	* dst_image must be in TRANSFER_DST_OPTIMAL layout and upload_buffer have TRANSFER_SRC_BIT usage flag.
 	*/
 	void copy_mipmaped_image_using_buffer(VkCommandBuffer cmd, VkImage dst_image,
-		const std::vector<rsx_subresource_layout> subresource_layout, int format, bool is_swizzled, u16 mipmap_count,
+		const std::vector<rsx_subresource_layout>& subresource_layout, int format, bool is_swizzled, u16 mipmap_count,
 		vk::vk_data_heap &upload_heap, vk::buffer* upload_buffer);
 }

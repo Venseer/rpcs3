@@ -37,13 +37,12 @@ void FragmentProgramDecompiler::SetDst(std::string code, bool append_mask)
 		break;
 	}
 
-	if (dst.saturate)
-	{
-		code = saturate(code);
-	}
-	else if (!dst.no_dest)
+	if (!dst.no_dest)
 	{
 		code = NoOverflow(code);
+
+		if (dst.saturate)
+			code = saturate(code);
 	}
 
 	code += (append_mask ? "$m" : "");
@@ -64,13 +63,6 @@ void FragmentProgramDecompiler::SetDst(std::string code, bool append_mask)
 
 	std::string dest = AddReg(dst.dest_reg, dst.fp16) + "$m";
 
-	if (dst.exp_tex)
-	{
-		//TODO
-		//If exp_tex really sets _bx2 flag, we may need to perform extra modifications to the src
-		AddCode("//TODO: exp tex flag is set");
-	}
-
 	AddCodeCond(Format(dest), code);
 	//AddCode("$ifcond " + dest + code + (append_mask ? "$m;" : ";"));
 
@@ -78,6 +70,27 @@ void FragmentProgramDecompiler::SetDst(std::string code, bool append_mask)
 	{
 		AddCode(m_parr.AddParam(PF_PARAM_NONE, getFloatTypeName(4), "cc" + std::to_string(src0.cond_mod_reg_index)) + "$m = " + dest + ";");
 	}
+}
+
+void FragmentProgramDecompiler::AddFlowOp(std::string code)
+{
+	//Flow operations can only consider conditionals and have no dst
+
+	if (src0.exec_if_gr && src0.exec_if_lt && src0.exec_if_eq)
+	{
+		AddCode(code + ";");
+		return;
+	}
+	else if (!src0.exec_if_gr && !src0.exec_if_lt && !src0.exec_if_eq)
+	{
+		AddCode("//" + code + ";");
+		return;
+	}
+
+	//We have a conditional expression
+	std::string cond = GetRawCond();
+
+	AddCode("if (any(" + cond + ")) " + code + ";");
 }
 
 void FragmentProgramDecompiler::AddCode(const std::string& code)
@@ -159,6 +172,11 @@ std::string FragmentProgramDecompiler::AddTex()
 	return m_parr.AddParam(PF_PARAM_UNIFORM, sampler, std::string("tex") + std::to_string(dst.tex_num));
 }
 
+std::string FragmentProgramDecompiler::AddType3()
+{
+	return m_parr.AddParam(PF_PARAM_NONE, getFloatTypeName(4), "src3", getFloatTypeName(4) + "(1., 1., 1., 1.)");
+}
+
 //Both of these were tested with a trace SoulCalibur IV title screen
 //Failure to catch causes infinite values since theres alot of rcp(0)
 std::string FragmentProgramDecompiler::NotZero(const std::string& code)
@@ -168,7 +186,7 @@ std::string FragmentProgramDecompiler::NotZero(const std::string& code)
 
 std::string FragmentProgramDecompiler::NotZeroPositive(const std::string& code)
 {
-	return "max(" + code + ", 1.E-10)";
+	return "max(abs(" + code + "), 1.E-10)";
 }
 
 std::string FragmentProgramDecompiler::NoOverflow(const std::string& code)
@@ -180,6 +198,7 @@ std::string FragmentProgramDecompiler::NoOverflow(const std::string& code)
 	if (dst.exp_tex)
 	{
 		//If dst.exp_tex really is _bx2 postfix, we need to unpack dynamic range
+		AddCode("//exp tex flag is set");
 		return "((" + code + "- 0.5) * 2.)";
 	}
 
@@ -188,14 +207,24 @@ std::string FragmentProgramDecompiler::NoOverflow(const std::string& code)
 	case 0:
 		break;
 	case 1:
-		//Disabled: Causes blue output in some games such as persona V and soul calibur IV
-		//return "clamp(" + code + ", -65504., 65504.)";
-		break;
+		return "clamp(" + code + ", -65504., 65504.)";
 	case 2:
-		return "clamp(" + code + ", -1., 1.)";
+		return "clamp(" + code + ", -2., 2.)";
 	}
 
 	return code;
+}
+
+bool FragmentProgramDecompiler::DstExpectsSca()
+{
+	int writes = 0;
+	
+	if (dst.mask_x) writes++;
+	if (dst.mask_y) writes++;
+	if (dst.mask_z) writes++;
+	if (dst.mask_w) writes++;
+
+	return (writes == 1);
 }
 
 std::string FragmentProgramDecompiler::Format(const std::string& code)
@@ -223,17 +252,8 @@ std::string FragmentProgramDecompiler::Format(const std::string& code)
 	return fmt::replace_all(code, repl_list);
 }
 
-std::string FragmentProgramDecompiler::GetCond()
+std::string FragmentProgramDecompiler::GetRawCond()
 {
-	if (src0.exec_if_gr && src0.exec_if_lt && src0.exec_if_eq)
-	{
-		return "true";
-	}
-	else if (!src0.exec_if_gr && !src0.exec_if_lt && !src0.exec_if_eq)
-	{
-		return "false";
-	}
-
 	static const char f[4] = { 'x', 'y', 'z', 'w' };
 
 	std::string swizzle, cond;
@@ -256,7 +276,21 @@ std::string FragmentProgramDecompiler::GetCond()
 	else //if(src0.exec_if_eq)
 		cond = compareFunction(COMPARE::FUNCTION_SEQ, AddCond() + swizzle, getFloatTypeName(4) + "(0., 0., 0., 0.)");
 
-	return "any(" + cond + ")";
+	return cond;
+}
+
+std::string FragmentProgramDecompiler::GetCond()
+{
+	if (src0.exec_if_gr && src0.exec_if_lt && src0.exec_if_eq)
+	{
+		return "true";
+	}
+	else if (!src0.exec_if_gr && !src0.exec_if_lt && !src0.exec_if_eq)
+	{
+		return "false";
+	}
+
+	return "any(" + GetRawCond() + ")";
 }
 
 void FragmentProgramDecompiler::AddCodeCond(const std::string& dst, const std::string& src)
@@ -274,26 +308,7 @@ void FragmentProgramDecompiler::AddCodeCond(const std::string& dst, const std::s
 	}
 
 	static const char f[4] = { 'x', 'y', 'z', 'w' };
-
-	std::string swizzle, cond;
-	swizzle += f[src0.cond_swizzle_x];
-	swizzle += f[src0.cond_swizzle_y];
-	swizzle += f[src0.cond_swizzle_z];
-	swizzle += f[src0.cond_swizzle_w];
-	swizzle = swizzle == "xyzw" ? "" : "." + swizzle;
-
-	if (src0.exec_if_gr && src0.exec_if_eq)
-		cond = compareFunction(COMPARE::FUNCTION_SGE, AddCond() + swizzle, getFloatTypeName(4) + "(0., 0., 0., 0.)");
-	else if (src0.exec_if_lt && src0.exec_if_eq)
-		cond = compareFunction(COMPARE::FUNCTION_SLE, AddCond() + swizzle, getFloatTypeName(4) + "(0., 0., 0., 0.)");
-	else if (src0.exec_if_gr && src0.exec_if_lt)
-		cond = compareFunction(COMPARE::FUNCTION_SNE, AddCond() + swizzle, getFloatTypeName(4) + "(0., 0., 0., 0.)");
-	else if (src0.exec_if_gr)
-		cond = compareFunction(COMPARE::FUNCTION_SGT, AddCond() + swizzle, getFloatTypeName(4) + "(0., 0., 0., 0.)");
-	else if (src0.exec_if_lt)
-		cond = compareFunction(COMPARE::FUNCTION_SLT, AddCond() + swizzle, getFloatTypeName(4) + "(0., 0., 0., 0.)");
-	else //if(src0.exec_if_eq)
-		cond = compareFunction(COMPARE::FUNCTION_SEQ, AddCond() + swizzle, getFloatTypeName(4) + "(0., 0., 0., 0.)");
+	std::string cond = GetRawCond();
 
 	ShaderVariable dst_var(dst);
 	dst_var.symplify();
@@ -358,7 +373,10 @@ template<typename T> std::string FragmentProgramDecompiler::GetSRC(T src)
 		break;
 
 	case RSX_FP_REGISTER_TYPE_UNKNOWN: // ??? Used by a few games, what is it?
-		LOG_ERROR(RSX, "Src type 3 used, please report this to a developer.");
+		LOG_ERROR(RSX, "Src type 3 used, opcode=0x%X, dst=0x%X s0=0x%X s1=0x%X s2=0x%X",
+				dst.opcode, dst.HEX, src0.HEX, src1.HEX, src2.HEX);
+
+		ret += AddType3();
 		break;
 
 	default:
@@ -422,7 +440,7 @@ bool FragmentProgramDecompiler::handle_sct(u32 opcode)
 	case RSX_FP_OPCODE_MOV: SetDst("$0"); return true;
 	case RSX_FP_OPCODE_MUL: SetDst("($0 * $1)"); return true;
 	// Note: It's higly likely that RCP is not IEEE compliant but a game that uses rcp(0) has to be found
-	case RSX_FP_OPCODE_RCP: SetDst("(1. / " +  NotZero("$0") + ")"); return true;
+	case RSX_FP_OPCODE_RCP: SetDst("(1. / " +  NotZero("$0.x") + ").xxxx"); return true;
 	// Note: RSQ is not IEEE compliant. rsq(0) is some big number (Silent Hill 3 HD)
 	// It is not know what happens if 0 is negative.
 	case RSX_FP_OPCODE_RSQ: SetDst("(1. / sqrt(" + NotZeroPositive("$0.x") + ").xxxx)"); return true;
@@ -506,6 +524,7 @@ bool FragmentProgramDecompiler::handle_tex_srb(u32 opcode)
 				SetDst(getFunction(FUNCTION::FUNCTION_TEXTURE_SAMPLE2D_DEPTH_RGBA));
 			else
 				SetDst(getFunction(FUNCTION::FUNCTION_TEXTURE_SAMPLE2D));
+			m_2d_sampled_textures |= (1 << dst.tex_num);
 			return true;
 		case rsx::texture_dimension_extended::texture_dimension_cubemap:
 			SetDst(getFunction(FUNCTION::FUNCTION_TEXTURE_SAMPLECUBE));
@@ -525,7 +544,14 @@ bool FragmentProgramDecompiler::handle_tex_srb(u32 opcode)
 			SetDst(getFunction(FUNCTION::FUNCTION_TEXTURE_SAMPLE1D_PROJ));
 			return true;
 		case rsx::texture_dimension_extended::texture_dimension_2d:
-			SetDst(getFunction(FUNCTION::FUNCTION_TEXTURE_SAMPLE2D_PROJ));
+			//Note shadow comparison only returns a true/false result!
+			if (DstExpectsSca() && (m_prog.shadow_textures & (1 << dst.tex_num)))
+			{
+				m_shadow_sampled_textures |= (1 << dst.tex_num);
+				SetDst(getFunction(FUNCTION::FUNCTION_TEXTURE_SAMPLE2D_PROJ), false);	//No swizzle mask on shadow lookup
+			}
+			else
+				SetDst(getFunction(FUNCTION::FUNCTION_TEXTURE_SAMPLE2D_PROJ));
 			return true;
 		case rsx::texture_dimension_extended::texture_dimension_cubemap:
 			SetDst(getFunction(FUNCTION::FUNCTION_TEXTURE_SAMPLECUBE_PROJ));
@@ -543,6 +569,7 @@ bool FragmentProgramDecompiler::handle_tex_srb(u32 opcode)
 			return true;
 		case rsx::texture_dimension_extended::texture_dimension_2d:
 			SetDst(getFunction(FUNCTION::FUNCTION_TEXTURE_SAMPLE2D_GRAD));
+			m_2d_sampled_textures |= (1 << dst.tex_num);
 			return true;
 		case rsx::texture_dimension_extended::texture_dimension_cubemap:
 			SetDst(getFunction(FUNCTION::FUNCTION_TEXTURE_SAMPLECUBE_GRAD));
@@ -561,6 +588,7 @@ bool FragmentProgramDecompiler::handle_tex_srb(u32 opcode)
 			return true;
 		case rsx::texture_dimension_extended::texture_dimension_2d:
 			SetDst(getFunction(FUNCTION::FUNCTION_TEXTURE_SAMPLE2D_LOD));
+			m_2d_sampled_textures |= (1 << dst.tex_num);
 			return true;
 		case rsx::texture_dimension_extended::texture_dimension_cubemap:
 			SetDst(getFunction(FUNCTION::FUNCTION_TEXTURE_SAMPLECUBE_LOD));
@@ -570,9 +598,9 @@ bool FragmentProgramDecompiler::handle_tex_srb(u32 opcode)
 			return true;
 		}
 		return false;
-	case RSX_FP_OPCODE_UP2: SetDst("unpackSnorm2x16(uint($0.x))"); return true; // TODO: More testing (Sonic The Hedgehog (NPUB-30442/NPEB-00478))
+	case RSX_FP_OPCODE_UP2: SetDst("unpackSnorm2x16(uint($0.x)).xyxy"); return true; // TODO: More testing (Sonic The Hedgehog (NPUB-30442/NPEB-00478))
 	case RSX_FP_OPCODE_UP4: SetDst("unpackSnorm4x8(uint($0.x))"); return true; // TODO: More testing (Sonic The Hedgehog (NPUB-30442/NPEB-00478))
-	case RSX_FP_OPCODE_UP16: SetDst("unpackHalf2x16(uint($0.x))"); return true;
+	case RSX_FP_OPCODE_UP16: SetDst("unpackHalf2x16(uint($0.x)).xyxy"); return true;
 	case RSX_FP_OPCODE_UPB: SetDst("(unpackUnorm4x8(uint($0.x)) * 255.)"); return true;
 	case RSX_FP_OPCODE_UPG: LOG_ERROR(RSX, "Unimplemented TEX_SRB instruction: UPG"); return true;
 	}
@@ -633,7 +661,10 @@ std::string FragmentProgramDecompiler::Decompile()
 		{
 			switch (opcode)
 			{
-			case RSX_FP_OPCODE_BRK: SetDst("break"); break;
+			case RSX_FP_OPCODE_BRK:
+				if (m_loop_count) AddFlowOp("break");
+				else LOG_ERROR(RSX, "BRK opcode found outside of a loop");
+				break;
 			case RSX_FP_OPCODE_CAL: LOG_ERROR(RSX, "Unimplemented SIP instruction: CAL"); break;
 			case RSX_FP_OPCODE_FENCT: forced_unit = FORCE_SCT; break;
 			case RSX_FP_OPCODE_FENCB: forced_unit = FORCE_SCB; break;
@@ -648,7 +679,7 @@ std::string FragmentProgramDecompiler::Decompile()
 			case RSX_FP_OPCODE_LOOP:
 				if (!src0.exec_if_eq && !src0.exec_if_gr && !src0.exec_if_lt)
 				{
-					AddCode(fmt::format("$ifcond for(int i%u = %u; i%u < %u; i%u += %u) {} //-> %u //LOOP",
+					AddCode(fmt::format("//$ifcond for(int i%u = %u; i%u < %u; i%u += %u) {} //-> %u //LOOP",
 						m_loop_count, src1.init_counter, m_loop_count, src1.end_counter, m_loop_count, src1.increment, src2.end_offset));
 				}
 				else
@@ -664,7 +695,7 @@ std::string FragmentProgramDecompiler::Decompile()
 			case RSX_FP_OPCODE_REP:
 				if (!src0.exec_if_eq && !src0.exec_if_gr && !src0.exec_if_lt)
 				{
-					AddCode(fmt::format("$ifcond for(int i%u = %u; i%u < %u; i%u += %u) {} //-> %u //REP",
+					AddCode(fmt::format("//$ifcond for(int i%u = %u; i%u < %u; i%u += %u) {} //-> %u //REP",
 						m_loop_count, src1.init_counter, m_loop_count, src1.end_counter, m_loop_count, src1.increment, src2.end_offset));
 				}
 				else
@@ -677,7 +708,7 @@ std::string FragmentProgramDecompiler::Decompile()
 					m_code_level++;
 				}
 				break;
-			case RSX_FP_OPCODE_RET: SetDst("return"); break;
+			case RSX_FP_OPCODE_RET: AddFlowOp("return"); break;
 
 			default:
 				return false;
@@ -689,16 +720,19 @@ std::string FragmentProgramDecompiler::Decompile()
 		switch (opcode)
 		{
 		case RSX_FP_OPCODE_NOP: break;
-		case RSX_FP_OPCODE_KIL: SetDst("discard", false); break;
+		case RSX_FP_OPCODE_KIL: AddFlowOp("discard"); break;
 
 		default:
 			int prev_force_unit = forced_unit;
 
+			//Some instructions do not respect forced unit
+			//Tested with Tales of Vesperia
+			if (SIP()) break;
+			if (handle_tex_srb(opcode)) break;
+
 			if (forced_unit == FORCE_NONE)
 			{
-				if (SIP()) break;
 				if (handle_sct(opcode)) break;
-				if (handle_tex_srb(opcode)) break;
 				if (handle_scb(opcode)) break;
 			}
 			else if (forced_unit == FORCE_SCT)

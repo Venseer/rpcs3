@@ -10,6 +10,7 @@ class cpu_thread;
 namespace vm
 {
 	extern u8* const g_base_addr;
+	extern u8* const g_exec_addr;
 
 	enum memory_location_t : uint
 	{
@@ -147,13 +148,16 @@ namespace vm
 		const u64 flags; // Currently unused
 
 		// Search and map memory (don't pass alignment smaller than 4096)
-		u32 alloc(u32 size, u32 align = 4096, u32 sup = 0);
+		u32 alloc(u32 size, u32 align = 4096, const uchar* data = nullptr, u32 sup = 0);
 
 		// Try to map memory at fixed location
-		u32 falloc(u32 addr, u32 size, u32 sup = 0);
+		u32 falloc(u32 addr, u32 size, const uchar* data = nullptr, u32 sup = 0);
 
 		// Unmap memory at specified location previously returned by alloc(), return size
-		u32 dealloc(u32 addr, u32* sup_out = nullptr);
+		u32 dealloc(u32 addr, uchar* data_out = nullptr, u32* sup_out = nullptr);
+
+		// Internal
+		u32 imp_used(const vm::writer_lock&);
 
 		// Get allocated memory count
 		u32 used();
@@ -185,12 +189,6 @@ namespace vm
 		}
 
 		fmt::throw_exception("Not a virtual memory pointer (%p)", real_ptr);
-	}
-
-	// Convert pointer-to-member to a vm address compatible offset
-	template<typename MT, typename T> inline u32 get_offset(MT T::*const member_ptr)
-	{
-		return static_cast<u32>(reinterpret_cast<std::uintptr_t>(&reinterpret_cast<char const volatile&>(reinterpret_cast<T*>(0ull)->*member_ptr)));
 	}
 
 	template<typename T>

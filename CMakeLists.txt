@@ -1,4 +1,13 @@
-cmake_minimum_required(VERSION 2.8.12)
+cmake_minimum_required(VERSION 3.0.2)
+
+option(WITH_GDB "Build RPCS3 with GNU GDB debugger support." OFF)
+option(WITHOUT_LLVM "Build RPCS3 without LLVM (not recommended)." OFF)
+option(USE_SHARED_LLVM_LIBS "Link against shared LLVM libs, instead of statically.
+Only recommended on Gentoo. May interfere with mesa driver and make RPCS3 non-functional." OFF)
+
+if (WITH_GDB)
+	add_definitions(-DWITH_GDB_DEBUGGER)
+endif()
 
 set(ASMJIT_STATIC TRUE)
 
@@ -9,14 +18,6 @@ endif()
 
 if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8)
 	message( FATAL_ERROR "RPCS3 can only be compiled on 64-bit platforms." )
-endif()
-
-if (CMAKE_COMPILER_IS_GNUCC AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS 5.1)
-	message( FATAL_ERROR "RPCS3 requires at least gcc-5.1." )
-endif()
-
-if (CMAKE_COMPILER_IS_GNUCC AND CMAKE_CXX_COMPILER_VERSION VERSION_EQUAL 6.1)
-	message( FATAL_ERROR "RPCS3 can't be compiled with gcc-6.1, see #1691." )
 endif()
 
 find_program(CCACHE_FOUND ccache)
@@ -41,6 +42,20 @@ option(VULKAN_PREBUILT "" OFF)
 # TODO: do real installation, including copying directory structure
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELEASE "${PROJECT_BINARY_DIR}/bin")
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_DEBUG "${PROJECT_BINARY_DIR}/bin")
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY_RELWITHDEBINFO "${PROJECT_BINARY_DIR}/bin")
+
 add_subdirectory( Vulkan )
 add_subdirectory( rpcs3 )
-add_subdirectory( rsx_program_decompiler )
+
+include_directories(3rdparty/hidapi/hidapi)
+if(APPLE)
+	add_subdirectory(3rdparty/hidapi/mac)
+	#list(APPEND LIBS hidapi)
+elseif(${CMAKE_SYSTEM_NAME} STREQUAL "Linux")
+	add_subdirectory(3rdparty/hidapi/linux)
+elseif(MSVC)
+	add_subdirectory(3rdparty/hidapi/windows)
+else()
+	add_subdirectory(3rdparty/hidapi/libusb)
+	#list(APPEND LIBS hidapi-libusb)
+endif()

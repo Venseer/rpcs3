@@ -410,10 +410,12 @@ public:
 	fs::file MakeElf(bool isElf32);
 	bool LoadHeaders(bool isElf32);
 	void ShowHeaders(bool isElf32);
-	bool LoadMetadata();
+	bool LoadMetadata(u8* klic_key);
 	bool DecryptData();
 	bool DecryptNPDRM(u8 *metadata, u32 metadata_size);
 	bool GetKeyFromRap(u8 *content_id, u8 *npdrm_key);
 };
 
-extern fs::file decrypt_self(fs::file elf_or_self);
+extern fs::file decrypt_self(fs::file elf_or_self, u8* klic_key = nullptr);
+extern bool verify_npdrm_self_headers(const fs::file& self, u8* klic_key = nullptr);
+extern std::array<u8, 0x10> get_default_self_klic();

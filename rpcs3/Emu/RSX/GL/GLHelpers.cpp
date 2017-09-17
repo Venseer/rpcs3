@@ -4,6 +4,7 @@
 
 namespace gl
 {
+	capabilities g_driver_caps;
 	const fbo screen{};
 
 	GLenum draw_mode(rsx::primitive_type in)
@@ -18,7 +19,7 @@ namespace gl
 		case rsx::primitive_type::triangle_strip: return GL_TRIANGLE_STRIP;
 		case rsx::primitive_type::triangle_fan: return GL_TRIANGLE_FAN;
 		case rsx::primitive_type::quads: return GL_TRIANGLES;
-		case rsx::primitive_type::quad_strip: return GL_TRIANGLES;
+		case rsx::primitive_type::quad_strip: return GL_TRIANGLE_STRIP;
 		case rsx::primitive_type::polygon: return GL_TRIANGLES;
 		}
 		fmt::throw_exception("unknow primitive type" HERE);
@@ -47,6 +48,14 @@ namespace gl
 		glEnable(GL_DEBUG_OUTPUT_SYNCHRONOUS);
 		glDebugMessageCallback(static_cast<GLDEBUGPROC>(dbgFunc), nullptr);
 #endif
+	}
+
+	capabilities &get_driver_caps()
+	{
+		if (!g_driver_caps.initialized)
+			g_driver_caps.initialize();
+
+		return g_driver_caps;
 	}
 
 	void fbo::create()
@@ -534,9 +543,9 @@ namespace gl
 		case rsx::primitive_type::triangles:
 		case rsx::primitive_type::triangle_strip:
 		case rsx::primitive_type::triangle_fan:
+		case rsx::primitive_type::quad_strip:
 			return true;
 		case rsx::primitive_type::quads:
-		case rsx::primitive_type::quad_strip:
 		case rsx::primitive_type::polygon:
 			return false;
 		}

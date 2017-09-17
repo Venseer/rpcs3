@@ -44,7 +44,11 @@ class FragmentProgramDecompiler
 	std::string AddCond();
 	std::string AddConst();
 	std::string AddTex();
+	void AddFlowOp(std::string code);
 	std::string Format(const std::string& code);
+
+	//Technically a temporary workaround until we know what type3 is
+	std::string AddType3();
 
 	//Prevent division by zero by catching denormals
 	//Simpler variant where input and output are expected to be positive
@@ -54,7 +58,13 @@ class FragmentProgramDecompiler
 	//Prevents operations from overflowing the max range (tested with fp_dynamic3 autotest sample)
 	std::string NoOverflow(const std::string& code);
 
+	/**
+	* Returns true if the dst set is not a vector (i.e only a single component)
+	*/
+	bool DstExpectsSca();
+
 	void AddCodeCond(const std::string& dst, const std::string& src);
+	std::string GetRawCond();
 	std::string GetCond();
 	template<typename T> std::string GetSRC(T src);
 	std::string BuildCode();
@@ -83,7 +93,11 @@ class FragmentProgramDecompiler
 	bool handle_tex_srb(u32 opcode);
 protected:
 	const RSXFragmentProgram &m_prog;
-	u32 m_ctrl;
+	u32 m_ctrl = 0;
+	
+	u32 m_2d_sampled_textures = 0;        //Mask of textures sampled as texture2D (conflicts with samplerShadow fetch)
+	u32 m_shadow_sampled_textures = 0;    //Mask of textures sampled as boolean shadow comparisons
+	
 	/** returns the type name of float vectors.
 	 */
 	virtual std::string getFloatTypeName(size_t elementCount) = 0;

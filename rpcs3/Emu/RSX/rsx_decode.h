@@ -1989,6 +1989,32 @@ struct registers_decoder<NV4097_SET_TRANSFORM_PROGRAM_START>
 };
 
 template<>
+struct registers_decoder<NV406E_SET_CONTEXT_DMA_SEMAPHORE>
+{
+	struct decoded_type
+	{
+	private:
+		union
+		{
+			u32 raw_value;
+		} m_data;
+	public:
+		decoded_type(u32 raw_value) { m_data.raw_value = raw_value; }
+
+		u32 context_dma() const
+		{
+			return m_data.raw_value;
+		}
+	};
+
+	static std::string dump(decoded_type &&decoded_values)
+	{
+		return "NV406E semaphore: context = " + std::to_string(decoded_values.context_dma());
+	}
+};
+
+
+template<>
 struct registers_decoder<NV406E_SEMAPHORE_OFFSET>
 {
 	struct decoded_type
@@ -3410,7 +3436,8 @@ struct registers_decoder<NV4097_SET_ZSTENCIL_CLEAR_VALUE>
 		union
 		{
 			u32 raw_value;
-			bitfield_decoder_t<8, 24> clear_z;
+			bitfield_decoder_t<0, 16> clear_z16;
+			bitfield_decoder_t<8, 24> clear_z24;
 			bitfield_decoder_t<0, 8> clear_stencil;
 		} m_data;
 	public:
@@ -3421,15 +3448,19 @@ struct registers_decoder<NV4097_SET_ZSTENCIL_CLEAR_VALUE>
 			return m_data.clear_stencil;
 		}
 
-		u32 clear_z() const
+		u32 clear_z(bool is_depth_stencil) const
 		{
-			return m_data.clear_z;
+			if (is_depth_stencil)
+				return m_data.clear_z24;
+			
+			return m_data.clear_z16;
 		}
 	};
 
 	static std::string dump(decoded_type &&decoded_values)
 	{
-		return "Clear: Z = " + std::to_string(decoded_values.clear_z()) +
+		return "Clear: Z24 = " + std::to_string(decoded_values.clear_z(true)) +
+			" z16 = " + std::to_string(decoded_values.clear_z(false)) +
 			" Stencil = " + std::to_string(decoded_values.clear_stencil());
 	}
 };
@@ -4595,7 +4626,7 @@ constexpr std::integer_sequence<u32, NV4097_SET_VIEWPORT_HORIZONTAL, NV4097_SET_
 	   NV4097_SET_VERTEX_ATTRIB_OUTPUT_MASK, NV4097_SET_SHADER_CONTROL,
 	   NV4097_SET_VERTEX_DATA_BASE_OFFSET, NV4097_SET_INDEX_ARRAY_ADDRESS,
 	   NV4097_SET_VERTEX_DATA_BASE_INDEX, NV4097_SET_SHADER_PROGRAM,
-	   NV4097_SET_TRANSFORM_PROGRAM_START, NV406E_SEMAPHORE_OFFSET, NV4097_SET_SEMAPHORE_OFFSET,
+	   NV4097_SET_TRANSFORM_PROGRAM_START, NV406E_SET_CONTEXT_DMA_SEMAPHORE, NV406E_SEMAPHORE_OFFSET, NV4097_SET_SEMAPHORE_OFFSET,
 	   NV3089_IMAGE_IN_OFFSET, NV3062_SET_OFFSET_DESTIN, NV309E_SET_OFFSET, NV3089_DS_DX, NV3089_DT_DY,
 	   NV0039_PITCH_IN, NV0039_PITCH_OUT, NV0039_LINE_LENGTH_IN, NV0039_LINE_COUNT, NV0039_OFFSET_OUT,
 	   NV0039_OFFSET_IN, NV4097_SET_VERTEX_ATTRIB_INPUT_MASK, NV4097_SET_FREQUENCY_DIVIDER_OPERATION,

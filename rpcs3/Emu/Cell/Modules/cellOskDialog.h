@@ -5,7 +5,6 @@ namespace vm { using namespace ps3; }
 //error codes
 enum
 {
-	CELL_OSKDIALOG_OK = 0x0,
 	CELL_OSKDIALOG_ERROR_IME_ALREADY_IN_USE = 0x8002b501,
 	CELL_OSKDIALOG_ERROR_GET_SIZE_ERROR = 0x8002b502,
 	CELL_OSKDIALOG_ERROR_UNKNOWN = 0x8002b503,
@@ -158,6 +157,5 @@ struct CellOskDialogImeDictionaryInfo
 };
 
 using cellOskDialogConfirmWordFilterCallback = int(vm::ptr<u16> pConfirmString, s32 wordLength);
-using cellOskDialogHardwareKeyboardEventHookCallback = class b8(
-    vm::ptr<CellOskDialogKeyMessage> keyMessage, vm::ptr<u32> action, vm::ptr<void> pActionInfo);
+using cellOskDialogHardwareKeyboardEventHookCallback = class b8(vm::ptr<CellOskDialogKeyMessage> keyMessage, vm::ptr<u32> action, vm::ptr<void> pActionInfo);
 using cellOskDialogForceFinishCallback = class b8();

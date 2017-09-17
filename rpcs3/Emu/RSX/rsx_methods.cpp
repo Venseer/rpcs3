@@ -1,5 +1,4 @@
-﻿#include "stdafx.h"
-#include "Utilities/Config.h"
+#include "stdafx.h"
 #include "rsx_methods.h"
 #include "RSXThread.h"
 #include "Emu/Memory/Memory.h"
@@ -7,21 +6,31 @@
 #include "rsx_utils.h"
 #include "rsx_decode.h"
 #include "Emu/Cell/PPUCallback.h"
+#include "Emu/Cell/lv2/sys_rsx.h"
 
 #include <sstream>
 #include <cereal/archives/binary.hpp>
 
 #include <thread>
 
-cfg::map_entry<double> g_cfg_rsx_frame_limit(cfg::root.video, "Frame limit",
+template <>
+void fmt_class_string<frame_limit_type>::format(std::string& out, u64 arg)
 {
-	{ "Off", 0. },
-	{ "59.94", 59.94 },
-	{ "50", 50. },
-	{ "60", 60. },
-	{ "30", 30. },
-	{ "Auto", -1. },
-});
+	format_enum(out, arg, [](frame_limit_type value)
+	{
+		switch (value)
+		{
+		case frame_limit_type::none: return "Off";
+		case frame_limit_type::_59_94: return "59.94";
+		case frame_limit_type::_50: return "50";
+		case frame_limit_type::_60: return "60";
+		case frame_limit_type::_30: return "30";
+		case frame_limit_type::_auto: return "Auto";
+		}
+
+		return unknown;
+	});
+}
 
 namespace rsx
 {
@@ -29,9 +38,12 @@ namespace rsx
 	
 	std::array<rsx_method_t, 0x10000 / 4> methods{};
 
-	[[noreturn]] void invalid_method(thread*, u32 _reg, u32 arg)
+	void invalid_method(thread* rsx, u32 _reg, u32 arg)
 	{
-		fmt::throw_exception("Invalid RSX method 0x%x (arg=0x%x)" HERE, _reg << 2, arg);
+		//Don't throw, gather information and ignore broken/garbage commands
+		//TODO: Investigate why these commands are executed at all. (Heap corruption? Alignment padding?)
+		LOG_ERROR(RSX, "Invalid RSX method 0x%x (arg=0x%x)" HERE, _reg << 2, arg);
+		rsx->invalid_command_interrupt_raised = true;
 	}
 
 	template<typename Type> struct vertex_data_type_from_element_type;
@@ -49,20 +61,24 @@ namespace rsx
 
 		void semaphore_acquire(thread* rsx, u32 _reg, u32 arg)
 		{
-			//TODO: dma
-			while (vm::ps3::read32(rsx->label_addr + method_registers.semaphore_offset_406e()) != arg)
+			const u32 addr = get_address(method_registers.semaphore_offset_406e(), method_registers.semaphore_context_dma_406e());
+			while (vm::ps3::read32(addr) != arg)
 			{
+				// todo: LLE: why does this one keep hanging? is it vsh system semaphore? whats actually pushing this to the command buffer?!
+				if (addr == 0x40000030)
+					break;
+
 				if (Emu.IsStopped())
 					break;
 
-				std::this_thread::sleep_for(1ms);
+				std::this_thread::yield();
 			}
 		}
 
 		void semaphore_release(thread* rsx, u32 _reg, u32 arg)
 		{
-			//TODO: dma
-			vm::ps3::write32(rsx->label_addr + method_registers.semaphore_offset_406e(), arg);
+			const u32 addr = get_address(method_registers.semaphore_offset_406e(), method_registers.semaphore_context_dma_406e());
+			vm::ps3::write32(addr, arg);
 		}
 	}
 
@@ -82,27 +98,45 @@ namespace rsx
 			}
 		}
 
+		void clear_zcull(thread* rsx, u32 _reg, u32 arg)
+		{
+			rsx->do_method(NV4097_CLEAR_ZCULL_SURFACE, arg);
+
+			if (rsx->capture_current_frame)
+			{
+				rsx->capture_frame("clear zcull memory");
+			}
+		}
+
 		void texture_read_semaphore_release(thread* rsx, u32 _reg, u32 arg)
 		{
-			if (!rsx->do_method(NV4097_TEXTURE_READ_SEMAPHORE_RELEASE, arg))
+			const u32 index = method_registers.semaphore_offset_4097() >> 4;
+			// lle-gcm likes to inject system reserved semaphores, presumably for system/vsh usage
+			// Avoid calling render to avoid any havoc(flickering) they may cause from invalid flush/write
+
+			if (index > 63 && !rsx->do_method(NV4097_TEXTURE_READ_SEMAPHORE_RELEASE, arg))
 			{
 				//
 			}
-
-			//TODO: dma
-			vm::ps3::write32(rsx->label_addr + method_registers.semaphore_offset_4097(), arg);
+			auto& sema = vm::ps3::_ref<RsxReports>(rsx->label_addr);
+			sema.semaphore[index].val = arg;
+			sema.semaphore[index].pad = 0;
+			sema.semaphore[index].timestamp = rsx->timestamp();
 		}
 
 		void back_end_write_semaphore_release(thread* rsx, u32 _reg, u32 arg)
 		{
-			if (!rsx->do_method(NV4097_BACK_END_WRITE_SEMAPHORE_RELEASE, arg))
+			const u32 index = method_registers.semaphore_offset_4097() >> 4;
+			if (index > 63 && !rsx->do_method(NV4097_BACK_END_WRITE_SEMAPHORE_RELEASE, arg))
 			{
 				//
 			}
+			u32 val = (arg & 0xff00ff00) | ((arg & 0xff) << 16) | ((arg >> 16) & 0xff);
 
-			//TODO: dma
-			vm::ps3::write32(rsx->label_addr + method_registers.semaphore_offset_4097(),
-				(arg & 0xff00ff00) | ((arg & 0xff) << 16) | ((arg >> 16) & 0xff));
+			auto& sema = vm::ps3::_ref<RsxReports>(rsx->label_addr);
+			sema.semaphore[index].val = val;
+			sema.semaphore[index].pad = 0;
+			sema.semaphore[index].timestamp = rsx->timestamp();
 		}
 
 		template<u32 id, u32 index, int count, typename type>
@@ -113,9 +147,14 @@ namespace rsx
 			static const size_t attribute_index = index / increment_per_array_index;
 			static const size_t vertex_subreg = index % increment_per_array_index;
 
+			const auto vtype = vertex_data_type_from_element_type<type>::type;
+
+			if (rsx->in_begin_end)
+				rsx->append_to_push_buffer(attribute_index, count, vertex_subreg, vtype, arg);
+
 			auto& info = rsx::method_registers.register_vertex_info[attribute_index];
 
-			info.type = vertex_data_type_from_element_type<type>::type;
+			info.type = vtype;
 			info.size = count;
 			info.frequency = 0;
 			info.stride = 0;
@@ -185,6 +224,31 @@ namespace rsx
 			}
 		};
 
+		template<u32 index>
+		struct set_vertex_data_scaled4s_m
+		{
+			static void impl(thread* rsx, u32 _reg, u32 arg)
+			{
+				LOG_ERROR(RSX, "SCALED_4S vertex data format is not properly implemented");
+				set_vertex_data_impl<NV4097_SET_VERTEX_DATA4S_M, index, 4, u16>(rsx, arg);
+			}
+		};
+
+		void set_array_element16(thread* rsx, u32, u32 arg)
+		{
+			if (rsx->in_begin_end)
+			{
+				rsx->append_array_element(arg & 0xFFFF);
+				rsx->append_array_element(arg >> 16);
+			}
+		}
+
+		void set_array_element32(thread* rsx, u32, u32 arg)
+		{
+			if (rsx->in_begin_end)
+				rsx->append_array_element(arg);
+		}
+
 		void draw_arrays(thread* rsx, u32 _reg, u32 arg)
 		{
 			rsx::method_registers.current_draw_clause.command = rsx::draw_command::array;
@@ -243,31 +307,28 @@ namespace rsx
 				return;
 			}
 
-			u32 max_vertex_count = 0;
-
-			for (u8 index = 0; index < rsx::limits::vertex_count; ++index)
+			//Check if we have immediate mode vertex data in a driver-local buffer
+			if (rsx::method_registers.current_draw_clause.command == rsx::draw_command::none)
 			{
-				auto &vertex_info = rsx::method_registers.register_vertex_info[index];
+				const u32 push_buffer_vertices_count = rsxthr->get_push_buffer_vertex_count();
+				const u32 push_buffer_index_count = rsxthr->get_push_buffer_index_count();
 
-				if (vertex_info.size > 0)
+				//Need to set this flag since it overrides some register contents
+				rsx::method_registers.current_draw_clause.is_immediate_draw = true;
+
+				if (push_buffer_index_count)
 				{
-					u32 element_size = rsx::get_vertex_type_size_on_host(vertex_info.type, vertex_info.size);
-					u32 element_count = vertex_info.size;
-
-					vertex_info.frequency = element_count;
-
-					if (rsx::method_registers.current_draw_clause.command == rsx::draw_command::none)
-					{
-						max_vertex_count = std::max<u32>(max_vertex_count, element_count);
-					}
+					rsx::method_registers.current_draw_clause.command = rsx::draw_command::indexed;
+					rsx::method_registers.current_draw_clause.first_count_commands.push_back(std::make_pair(0, push_buffer_index_count));
+				}
+				else if (push_buffer_vertices_count)
+				{
+					rsx::method_registers.current_draw_clause.command = rsx::draw_command::array;
+					rsx::method_registers.current_draw_clause.first_count_commands.push_back(std::make_pair(0, push_buffer_vertices_count));
 				}
 			}
-
-			if (rsx::method_registers.current_draw_clause.command == rsx::draw_command::none && max_vertex_count)
-			{
-				rsx::method_registers.current_draw_clause.command = rsx::draw_command::array;
-				rsx::method_registers.current_draw_clause.first_count_commands.push_back(std::make_pair(0, max_vertex_count));
-			}
+			else
+				rsx::method_registers.current_draw_clause.is_immediate_draw = false;
 
 			if (!(rsx::method_registers.current_draw_clause.first_count_commands.empty() &&
 			        rsx::method_registers.current_draw_clause.inline_vertex_array.empty()))
@@ -276,27 +337,36 @@ namespace rsx
 			}
 		}
 
+		vm::addr_t get_report_data_impl(u32 offset)
+		{
+			u32 location = 0;
+			blit_engine::context_dma report_dma = method_registers.context_dma_report();
+
+			switch (report_dma)
+			{
+			case blit_engine::context_dma::to_memory_get_report: location = CELL_GCM_CONTEXT_DMA_REPORT_LOCATION_LOCAL; break;
+			case blit_engine::context_dma::report_location_main: location = CELL_GCM_CONTEXT_DMA_REPORT_LOCATION_MAIN; break;
+			case blit_engine::context_dma::memory_host_buffer: location = CELL_GCM_CONTEXT_DMA_MEMORY_HOST_BUFFER; break;
+			default:
+				return vm::addr_t(0);
+			}
+
+			return vm::cast(get_address(offset, location));
+		}
+
 		void get_report(thread* rsx, u32 _reg, u32 arg)
 		{
 			u8 type = arg >> 24;
 			u32 offset = arg & 0xffffff;
-			blit_engine::context_dma report_dma = method_registers.context_dma_report();
-			u32 location;
 
-			switch (report_dma)
+			auto address_ptr = get_report_data_impl(offset);
+			if (!address_ptr)
 			{
-			case blit_engine::context_dma::to_memory_get_report: location = CELL_GCM_LOCATION_LOCAL; break;
-			case blit_engine::context_dma::report_location_main:
-			case blit_engine::context_dma::memory_host_buffer: 
-				location = CELL_GCM_LOCATION_MAIN; break;
-			default:
-				LOG_WARNING(RSX, "nv4097::get_report: bad report dma: 0x%x", (u8)report_dma);
+				LOG_ERROR(RSX, "Bad argument passed to NV4097_GET_REPORT, arg=0x%X", arg);
 				return;
 			}
 
-			vm::ps3::ptr<CellGcmReportData> result = vm::cast(get_address(offset, location));
-
-			result->timer = rsx->timestamp();
+			vm::ps3::ptr<CellGcmReportData> result = address_ptr;
 
 			switch (type)
 			{
@@ -305,17 +375,16 @@ namespace rsx
 			case CELL_GCM_ZCULL_STATS1:
 			case CELL_GCM_ZCULL_STATS2:
 			case CELL_GCM_ZCULL_STATS3:
-				result->value = 0;
+				result->value = rsx->get_zcull_stats(type);
 				LOG_WARNING(RSX, "NV4097_GET_REPORT: Unimplemented type %d", type);
 				break;
-
 			default:
-				result->value = 0;
 				LOG_ERROR(RSX, "NV4097_GET_REPORT: Bad type %d", type);
 				break;
 			}
 
-			//result->padding = 0;
+			result->timer = rsx->timestamp();
+			result->padding = 0;
 		}
 
 		void clear_report_value(thread* rsx, u32 _reg, u32 arg)
@@ -332,6 +401,59 @@ namespace rsx
 				LOG_ERROR(RSX, "NV4097_CLEAR_REPORT_VALUE: Bad type: %d", arg);
 				break;
 			}
+
+			rsx->clear_zcull_stats(arg);
+		}
+
+		void set_render_mode(thread* rsx, u32, u32 arg)
+		{
+			const u32 mode = arg >> 24;
+			switch (mode)
+			{
+			case 1:
+				rsx->conditional_render_enabled = false;
+				rsx->conditional_render_test_failed = false;
+				return;
+			case 2:
+				rsx->conditional_render_enabled = true;
+				LOG_WARNING(RSX, "Conditional rendering mode enabled (mode 2)");
+				break;
+			default:
+				rsx->conditional_render_enabled = false;
+				LOG_ERROR(RSX, "Unknown render mode %d", mode);
+				return;
+			}
+
+			const u32 offset = arg & 0xffffff;
+			auto address_ptr = get_report_data_impl(offset);
+
+			if (!address_ptr)
+			{
+				rsx->conditional_render_test_failed = false;
+				LOG_ERROR(RSX, "Bad argument passed to NV4097_SET_RENDER_ENABLE, arg=0x%X", arg);
+				return;
+			}
+
+			vm::ps3::ptr<CellGcmReportData> result = address_ptr;
+			rsx->conditional_render_test_failed = (result->value == 0);
+		}
+
+		void set_zcull_render_enable(thread* rsx, u32, u32 arg)
+		{
+			rsx->zcull_rendering_enabled = !!arg;
+			rsx->notify_zcull_info_changed();
+		}
+
+		void set_zcull_stats_enable(thread* rsx, u32, u32 arg)
+		{
+			rsx->zcull_stats_enabled = !!arg;
+			rsx->notify_zcull_info_changed();
+		}
+
+		void set_zcull_pixel_count_enable(thread* rsx, u32, u32 arg)
+		{
+			rsx->zcull_pixel_cnt_enabled = !!arg;
+			rsx->notify_zcull_info_changed();
 		}
 
 		void set_surface_dirty_bit(thread* rsx, u32 _reg, u32)
@@ -391,20 +513,36 @@ namespace rsx
 			const f32 in_x = method_registers.blit_engine_in_x();
 			const f32 in_y = method_registers.blit_engine_in_y();
 
-			const u16 clip_w = std::min(method_registers.blit_engine_clip_width(), out_w);
-			const u16 clip_h = std::min(method_registers.blit_engine_clip_height(), out_h);
+			//Clipping
+			//Validate that clipping rect will fit onto both src and dst regions
+			u16 clip_w = std::min(method_registers.blit_engine_clip_width(), out_w);
+			u16 clip_h = std::min(method_registers.blit_engine_clip_height(), out_h);
 
-            // if the clip'd region will end up outside of the source area, we ignore the given clip x/y and just use 0
-            // see: Spyro - BLES00382 intro, psgl sdk samples
-            const u16 clip_x = method_registers.blit_engine_clip_x() > (in_x + in_w - clip_w) ? 0 : method_registers.blit_engine_clip_x();
-            const u16 clip_y = method_registers.blit_engine_clip_y() > (in_y + in_h - clip_h) ? 0 : method_registers.blit_engine_clip_y();
+			u16 clip_x = method_registers.blit_engine_clip_x();
+			u16 clip_y = method_registers.blit_engine_clip_y();
 
+			if (clip_w == 0)
+			{
+				clip_x = 0;
+				clip_w = out_w;
+			}
+
+			if (clip_h == 0)
+			{
+				clip_y = 0;
+				clip_h = out_h;
+			}
+
+			//Fit onto dst
+			if (clip_x && (out_x + clip_x + clip_w) > out_w) clip_x = 0;
+			if (clip_y && (out_y + clip_y + clip_h) > out_h) clip_y = 0;
 
 			u16 in_pitch = method_registers.blit_engine_input_pitch();
 
 			if (in_origin != blit_engine::transfer_origin::corner)
 			{
 				LOG_ERROR(RSX, "NV3089_IMAGE_IN_SIZE: unknown origin (%d)", (u8)in_origin);
+				return;
 			}
 
 			if (operation != rsx::blit_engine::transfer_operation::srccopy)
@@ -447,14 +585,14 @@ namespace rsx
 				//HACK: it's extension of the flip-hack. remove this when textures cache would be properly implemented
 				for (int i = 0; i < rsx::limits::color_buffers_count; ++i)
 				{
-					u32 begin = rsx->gcm_buffers[i].offset;
+					u32 begin = rsx->display_buffers[i].offset;
 
 					if (dst_offset < begin || !begin)
 					{
 						continue;
 					}
 
-					if (rsx->gcm_buffers[i].width < 720 || rsx->gcm_buffers[i].height < 480)
+					if (rsx->display_buffers[i].width < 720 || rsx->display_buffers[i].height < 480)
 					{
 						continue;
 					}
@@ -464,7 +602,7 @@ namespace rsx
 						return;
 					}
 
-					u32 end = begin + rsx->gcm_buffers[i].height * rsx->gcm_buffers[i].pitch;
+					u32 end = begin + rsx->display_buffers[i].height * rsx->display_buffers[i].pitch;
 
 					if (dst_offset < end)
 					{
@@ -543,10 +681,46 @@ namespace rsx
 				}
 			}
 
+			if (g_cfg.video.use_gpu_texture_scaling && dst_dma == CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER)
+			{
+				//For now, only use this for actual scaled images, there are use cases that should not go through 3d engine, e.g program ucode transfer
+				//TODO: Figure out more instances where we can use this without problems
+
+				blit_src_info src_info;
+				blit_dst_info dst_info;
+
+				src_info.format = src_color_format;
+				src_info.width = in_w;
+				src_info.height = in_h;
+				src_info.pitch = in_pitch;
+				src_info.slice_h = slice_h;
+				src_info.offset_x = (u16)in_x;
+				src_info.offset_y = (u16)in_y;
+				src_info.pixels = pixels_src;
+				src_info.rsx_address = get_address(src_offset, src_dma);
+
+				dst_info.format = dst_color_format;
+				dst_info.width = convert_w;
+				dst_info.height = convert_h;
+				dst_info.clip_x = clip_x;
+				dst_info.clip_y = clip_y;
+				dst_info.clip_width = clip_w;
+				dst_info.clip_height = clip_h;
+				dst_info.offset_x = out_x;
+				dst_info.offset_y = out_y;
+				dst_info.pitch = out_pitch;
+				dst_info.pixels = pixels_dst;
+				dst_info.rsx_address = get_address(dst_offset, dst_dma);
+				dst_info.swizzled = (method_registers.blit_engine_context_surface() == blit_engine::context_surface::swizzle2d);
+
+				if (rsx->scaled_image_from_memory(src_info, dst_info, in_inter == blit_engine::transfer_interpolator::foh))
+					return;
+			}
+
 			if (method_registers.blit_engine_context_surface() != blit_engine::context_surface::swizzle2d)
 			{
 				if (need_convert || need_clip)
-				{
+				{					
 					if (need_clip)
 					{
 						if (need_convert)
@@ -743,23 +917,31 @@ namespace rsx
 			Emu.Pause();
 		}
 
-		if (double limit = g_cfg_rsx_frame_limit.get())
+		double limit = 0.;
+		switch (g_cfg.video.frame_limit)
 		{
-			if (limit < 0) limit = rsx->fps_limit; // TODO
-
+		case frame_limit_type::none: limit = 0.; break;
+		case frame_limit_type::_59_94: limit = 59.94; break;
+		case frame_limit_type::_50: limit = 50.; break;
+		case frame_limit_type::_60: limit = 60.; break;
+		case frame_limit_type::_30: limit = 30.; break;
+		case frame_limit_type::_auto: limit = rsx->fps_limit; break; // TODO
+		}
+		if (limit)
+		{
 			std::this_thread::sleep_for(std::chrono::milliseconds((s64)(1000.0 / limit - rsx->timer_sync.GetElapsedTimeInMilliSec())));
 			rsx->timer_sync.Start();
 		}
 		
-		rsx->gcm_current_buffer = arg;
+		rsx->current_display_buffer = arg;
 		rsx->flip(arg);
 		// After each flip PS3 system is executing a routine that changes registers value to some default.
 		// Some game use this default state (SH3).
-		rsx->reset();
+		if (rsx->isHLE)
+			rsx->reset();
 
 		rsx->last_flip_time = get_system_time() - 1000000;
-		rsx->gcm_current_buffer = arg;
-		rsx->flip_status = 0;
+		rsx->flip_status = CELL_GCM_DISPLAY_FLIP_STATUS_DONE;
 
 		if (rsx->flip_handler)
 		{
@@ -776,6 +958,7 @@ namespace rsx
 
 	void user_command(thread* rsx, u32, u32 arg)
 	{
+		sys_rsx_context_attribute(0x55555555, 0xFEF, 0, arg, 0, 0);
 		if (rsx->user_handler)
 		{
 			rsx->intr_thread->cmd_list
@@ -787,6 +970,31 @@ namespace rsx
 
 			rsx->intr_thread->notify();
 		}
+	}
+
+	namespace gcm
+	{
+		// not entirely sure which one should actually do the flip, or if these should be handled seperately,
+		// so for now lets flip in queue and just let the driver deal with it
+		template<u32 index>
+		struct driver_flip
+		{
+			static void impl(thread* rsx, u32 _reg, u32 arg)
+			{
+				rsx->reset();
+				sys_rsx_context_attribute(0x55555555, 0x102, index, arg, 0, 0);
+			}
+		};
+
+		template<u32 index>
+		struct queue_flip
+		{
+			static void impl(thread* rsx, u32 _reg, u32 arg)
+			{
+				flip_command(rsx, _reg, arg);
+				sys_rsx_context_attribute(0x55555555, 0x103, index, arg, 0, 0);
+			}
+		};
 	}
 
 	void rsx_state::reset()
@@ -811,17 +1019,17 @@ namespace rsx
 		registers[NV4097_SET_STENCIL_FUNC] = CELL_GCM_ALWAYS;
 		registers[NV4097_SET_STENCIL_FUNC_REF] = 0x00;
 		registers[NV4097_SET_STENCIL_FUNC_MASK] = 0xff;
-		//registers[NV4097_SET_STENCIL_OP_FAIL] = CELL_GCM_KEEP;
-		//registers[NV4097_SET_STENCIL_OP_ZFAIL] = CELL_GCM_KEEP;
-		//registers[NV4097_SET_STENCIL_OP_ZPASS] = CELL_GCM_KEEP;
+		registers[NV4097_SET_STENCIL_OP_FAIL] = CELL_GCM_KEEP;
+		registers[NV4097_SET_STENCIL_OP_ZFAIL] = CELL_GCM_KEEP;
+		registers[NV4097_SET_STENCIL_OP_ZPASS] = CELL_GCM_KEEP;
 
 		registers[NV4097_SET_BACK_STENCIL_MASK] = 0xff;
 		registers[NV4097_SET_BACK_STENCIL_FUNC] = CELL_GCM_ALWAYS;
 		registers[NV4097_SET_BACK_STENCIL_FUNC_REF] = 0x00;
 		registers[NV4097_SET_BACK_STENCIL_FUNC_MASK] = 0xff;
-		//registers[NV4097_SET_BACK_STENCIL_OP_FAIL] = CELL_GCM_KEEP;
-		//registers[NV4097_SET_BACK_STENCIL_OP_ZFAIL] = CELL_GCM_KEEP;
-		//registers[NV4097_SET_BACK_STENCIL_OP_ZPASS] = CELL_GCM_KEEP;
+		registers[NV4097_SET_BACK_STENCIL_OP_FAIL] = CELL_GCM_KEEP;
+		registers[NV4097_SET_BACK_STENCIL_OP_ZFAIL] = CELL_GCM_KEEP;
+		registers[NV4097_SET_BACK_STENCIL_OP_ZPASS] = CELL_GCM_KEEP;
 
 		//registers[NV4097_SET_SHADE_MODE] = CELL_GCM_SMOOTH;
 
@@ -853,13 +1061,14 @@ namespace rsx
 		registers[NV4097_SET_CLEAR_RECT_HORIZONTAL] = (4096 << 16) | 0;
 		registers[NV4097_SET_CLEAR_RECT_VERTICAL] = (4096 << 16) | 0;
 
-		registers[NV4097_SET_ZSTENCIL_CLEAR_VALUE] = 0xffffffff;
+		// Stencil bits init to 00 - Tested with NPEB90184 (never sets the depth_stencil clear values but uses stencil test)
+		registers[NV4097_SET_ZSTENCIL_CLEAR_VALUE] = 0xffffff00;
 
 		// CELL_GCM_SURFACE_A8R8G8B8, CELL_GCM_SURFACE_Z24S8 and CELL_GCM_SURFACE_CENTER_1
 		registers[NV4097_SET_SURFACE_FORMAT] = (8 << 0) | (2 << 5) | (0 << 12) | (1 << 16) | (1 << 24);
 
 		// rsx dma initial values
-		registers[NV4097_SET_CONTEXT_DMA_REPORT] = CELL_GCM_CONTEXT_DMA_TO_MEMORY_GET_REPORT;
+		registers[NV4097_SET_CONTEXT_DMA_REPORT] = CELL_GCM_CONTEXT_DMA_REPORT_LOCATION_LOCAL;
 		registers[NV406E_SET_CONTEXT_DMA_SEMAPHORE] = CELL_GCM_CONTEXT_DMA_SEMAPHORE_RW;
 		registers[NV3062_SET_CONTEXT_DMA_IMAGE_DESTIN] = CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER;
 		registers[NV309E_SET_CONTEXT_DMA_IMAGE] = CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER;
@@ -969,10 +1178,17 @@ namespace rsx
 		methods[NV4097_SET_SURFACE_COLOR_BOFFSET]         = nullptr;
 		methods[NV4097_SET_SURFACE_PITCH_B]               = nullptr;
 		methods[NV4097_SET_SURFACE_COLOR_TARGET]          = nullptr;
+		methods[0x224 >> 2]                               = nullptr;
+		methods[0x228 >> 2]                               = nullptr;
+		methods[0x230 >> 2]                               = nullptr;
 		methods[NV4097_SET_SURFACE_PITCH_Z]               = nullptr;
 		methods[NV4097_INVALIDATE_ZCULL]                  = nullptr;
 		methods[NV4097_SET_CYLINDRICAL_WRAP]              = nullptr;
 		methods[NV4097_SET_CYLINDRICAL_WRAP1]             = nullptr;
+		methods[0x240 >> 2]                               = nullptr;
+		methods[0x244 >> 2]                               = nullptr;
+		methods[0x248 >> 2]                               = nullptr;
+		methods[0x24C >> 2]                               = nullptr;
 		methods[NV4097_SET_SURFACE_PITCH_C]               = nullptr;
 		methods[NV4097_SET_SURFACE_PITCH_D]               = nullptr;
 		methods[NV4097_SET_SURFACE_COLOR_COFFSET]         = nullptr;
@@ -1041,6 +1257,7 @@ namespace rsx
 		methods[NV4097_SET_FOG_MODE]                      = nullptr;
 		methods[NV4097_SET_FOG_PARAMS]                    = nullptr;
 		methods[NV4097_SET_FOG_PARAMS + 1]                = nullptr;
+		methods[0x8d8 >> 2]                               = nullptr;
 		methods[NV4097_SET_SHADER_PROGRAM]                = nullptr;
 		methods[NV4097_SET_VERTEX_TEXTURE_OFFSET]         = nullptr;
 		methods[NV4097_SET_VERTEX_TEXTURE_FORMAT]         = nullptr;
@@ -1124,6 +1341,7 @@ namespace rsx
 		methods[NV4097_SET_TEXTURE_BORDER_COLOR]          = nullptr;
 		methods[NV4097_SET_VERTEX_DATA4F_M]               = nullptr;
 		methods[NV4097_SET_COLOR_KEY_COLOR]               = nullptr;
+		methods[0x1d04 >> 2]                              = nullptr;
 		methods[NV4097_SET_SHADER_CONTROL]                = nullptr;
 		methods[NV4097_SET_INDEXED_CONSTANT_READ_LIMITS]  = nullptr;
 		methods[NV4097_SET_SEMAPHORE_OFFSET]              = nullptr;
@@ -1244,6 +1462,14 @@ namespace rsx
 		methods[NV3089_IMAGE_IN_OFFSET]                   = nullptr;
 		methods[NV3089_IMAGE_IN]                          = nullptr;
 
+		//Some custom GCM methods
+		methods[GCM_SET_DRIVER_OBJECT]                    = nullptr;
+		
+		bind_array<GCM_FLIP_HEAD, 1, 2, nullptr>();
+		bind_array<GCM_DRIVER_QUEUE, 1, 8, nullptr>();
+
+		bind_array<(0x400 >> 2), 1, 0x10, nullptr>();
+		bind_array<(0x440 >> 2), 1, 0x20, nullptr>();
 		bind_array<NV4097_SET_ANISO_SPREAD, 1, 16, nullptr>();
 		bind_array<NV4097_SET_VERTEX_TEXTURE_OFFSET, 1, 8 * 4, nullptr>();
 		bind_array<NV4097_SET_VERTEX_DATA_SCALED4S_M, 1, 32, nullptr>();
@@ -1262,21 +1488,12 @@ namespace rsx
 		bind_array<NV4097_SET_TEXTURE_OFFSET, 1, 8 * 16, nullptr>();
 		bind_array<NV4097_SET_VERTEX_DATA4F_M, 1, 64, nullptr>();
 		bind_array<NV4097_SET_VERTEX_DATA1F_M, 1, 16, nullptr>();
+		bind_array<NV4097_SET_COLOR_KEY_COLOR, 1, 16, nullptr>();
 
 		// NV406E
 		bind<NV406E_SET_REFERENCE, nv406e::set_reference>();
 		bind<NV406E_SEMAPHORE_ACQUIRE, nv406e::semaphore_acquire>();
 		bind<NV406E_SEMAPHORE_RELEASE, nv406e::semaphore_release>();
-
-		/*
-
-		// Store previous fbo addresses to detect RTT config changes.
-		std::array<u32, 4> m_previous_color_address = {};
-		u32 m_previous_address_z = 0;
-		u32 m_previous_target = 0;
-		u32 m_previous_clip_horizontal = 0;
-		u32 m_previous_clip_vertical = 0;
-		*/
 
 		// NV4097
 		bind<NV4097_TEXTURE_READ_SEMAPHORE_RELEASE, nv4097::texture_read_semaphore_release>();
@@ -1286,6 +1503,9 @@ namespace rsx
 		bind<NV4097_DRAW_ARRAYS, nv4097::draw_arrays>();
 		bind<NV4097_DRAW_INDEX_ARRAY, nv4097::draw_index_array>();
 		bind<NV4097_INLINE_ARRAY, nv4097::draw_inline_array>();
+		bind<NV4097_ARRAY_ELEMENT16, nv4097::set_array_element16>();
+		bind<NV4097_ARRAY_ELEMENT32, nv4097::set_array_element32>();
+		bind_range<NV4097_SET_VERTEX_DATA_SCALED4S_M, 1, 32, nv4097::set_vertex_data_scaled4s_m>();
 		bind_range<NV4097_SET_VERTEX_DATA4UB_M, 1, 16, nv4097::set_vertex_data4ub_m>();
 		bind_range<NV4097_SET_VERTEX_DATA1F_M, 1, 16, nv4097::set_vertex_data1f_m>();
 		bind_range<NV4097_SET_VERTEX_DATA2F_M, 1, 32, nv4097::set_vertex_data2f_m>();
@@ -1320,6 +1540,11 @@ namespace rsx
 		bind_range<NV4097_SET_TEXTURE_FILTER, 8, 16, nv4097::set_texture_dirty_bit>();
 		bind_range<NV4097_SET_TEXTURE_IMAGE_RECT, 8, 16, nv4097::set_texture_dirty_bit>();
 		bind_range<NV4097_SET_TEXTURE_BORDER_COLOR, 8, 16, nv4097::set_texture_dirty_bit>();
+		bind<NV4097_SET_RENDER_ENABLE, nv4097::set_render_mode>();
+		bind<NV4097_SET_ZCULL_EN, nv4097::set_zcull_render_enable>();
+		bind<NV4097_SET_ZCULL_STATS_ENABLE, nv4097::set_zcull_stats_enable>();
+		bind<NV4097_SET_ZPASS_PIXEL_COUNT_ENABLE, nv4097::set_zcull_pixel_count_enable>();
+		bind<NV4097_CLEAR_ZCULL_SURFACE, nv4097::clear_zcull>();
 
 		//NV308A
 		bind_range<NV308A_COLOR, 1, 256, nv308a::color>();
@@ -1331,9 +1556,14 @@ namespace rsx
 		//NV0039
 		bind<NV0039_BUFFER_NOTIFY, nv0039::buffer_notify>();
 
+		// lv1 hypervisor
+		bind_array<GCM_SET_USER_COMMAND, 1, 2, user_command>();
+		bind_range<GCM_FLIP_HEAD, 1, 2, gcm::driver_flip>();
+		bind_range<GCM_DRIVER_QUEUE, 1, 8, gcm::queue_flip>();
+
 		// custom methods
 		bind<GCM_FLIP_COMMAND, flip_command>();
-		bind<GCM_SET_USER_COMMAND, user_command>();
+		
 
 		return true;	
 	}();

@@ -1,5 +1,8 @@
 #pragma once
 
+#include "gcm_enums.h"
+#include <atomic>
+
 extern "C"
 {
 #include <libavutil/pixfmt.h>
@@ -7,6 +10,31 @@ extern "C"
 
 namespace rsx
 {
+	//Holds information about a framebuffer
+	struct gcm_framebuffer_info
+	{
+		u32 address = 0;
+		u32 pitch = 0;
+
+		bool is_depth_surface;
+
+		rsx::surface_color_format color_format;
+		rsx::surface_depth_format depth_format;
+
+		u16 width;
+		u16 height;
+
+		gcm_framebuffer_info()
+		{
+			address = 0;
+			pitch = 0;
+		}
+
+		gcm_framebuffer_info(const u32 address_, const u32 pitch_, bool is_depth_, const rsx::surface_color_format fmt_, const rsx::surface_depth_format dfmt_, const u16 w, const u16 h)
+			:address(address_), pitch(pitch_), is_depth_surface(is_depth_), color_format(fmt_), depth_format(dfmt_), width(w), height(h)
+		{}
+	};
+
 	template<typename T>
 	void pad_texture(void* input_pixels, void* output_pixels, u16 input_width, u16 input_height, u16 output_width, u16 output_height)
 	{
@@ -106,6 +134,8 @@ namespace rsx
 		}
 	}
 
+	void scale_image_nearest(void* dst, const void* src, u16 src_width, u16 src_height, u16 dst_pitch, u16 src_pitch, u8 pixel_size, u8 samples, bool swap_bytes = false);
+
 	void convert_scale_image(u8 *dst, AVPixelFormat dst_format, int dst_width, int dst_height, int dst_pitch,
 		const u8 *src, AVPixelFormat src_format, int src_width, int src_height, int src_pitch, int src_slice_h, bool bilinear);
 
@@ -122,4 +152,90 @@ namespace rsx
 	void fill_viewport_matrix(void *buffer, bool transpose);
 
 	std::array<float, 4> get_constant_blend_colors();
+
+	/**
+	 * Clips a rect so that it never falls outside the parent region
+	 * attempt_fit: allows resizing of the requested region. If false, failure to fit will result in the child rect being pinned to (0, 0)
+	 */
+	template <typename T>
+	std::tuple<T, T, T, T> clip_region(T parent_width, T parent_height, T clip_x, T clip_y, T clip_width, T clip_height, bool attempt_fit)
+	{
+		T x = clip_x;
+		T y = clip_y;
+		T width = clip_width;
+		T height = clip_height;
+
+		if ((clip_x + clip_width) > parent_width)
+		{
+			if (clip_x >= parent_width)
+			{
+				if (clip_width < parent_width)
+					width = clip_width;
+				else
+					width = parent_width;
+
+				x = (T)0;
+			}
+			else
+			{
+				if (attempt_fit)
+					width = parent_width - clip_x;
+				else
+					width = std::min(clip_width, parent_width);
+			}
+		}
+
+		if ((clip_y + clip_height) > parent_height)
+		{
+			if (clip_y >= parent_height)
+			{
+				if (clip_height < parent_height)
+					height = clip_height;
+				else
+					height = parent_height;
+
+				y = (T)0;
+			}
+			else
+			{
+				if (attempt_fit)
+					height = parent_height - clip_y;
+				else
+					height = std::min(clip_height, parent_height);
+			}
+		}
+
+		return std::make_tuple(x, y, width, height);
+	}
+
+	// Conditional mutex lock for shared mutex types
+	// May silently fail to acquire the lock
+	template <typename lock_type>
+	struct conditional_lock
+	{
+		lock_type& _ref;
+		std::atomic_bool& _flag;
+		bool acquired = false;
+
+		conditional_lock(std::atomic_bool& flag, lock_type& mutex):
+			_ref(mutex), _flag(flag)
+		{
+			const bool _false = false;
+			if (flag.compare_exchange_weak(const_cast<bool&>(_false), true))
+			{
+				mutex.lock_shared();
+				acquired = true;
+			}
+		}
+
+		~conditional_lock()
+		{
+			if (acquired)
+			{
+				_ref.unlock_shared();
+				_flag.store(false);
+				acquired = false;
+			}
+		}
+	};
 }

@@ -3,6 +3,7 @@
 // http://www.gnu.org/licenses/gpl-3.0.txt
 
 #include "utils.h"
+#include <cstring>
 #include <stdio.h>
 #include <time.h>
 
@@ -51,28 +52,22 @@ u64 hex_to_u64(const char* hex_str)
 	return result;
 }
 
-void hex_to_bytes(unsigned char *data, const char *hex_str, unsigned int str_length)
+void hex_to_bytes(unsigned char* data, const char* hex_str, unsigned int str_length)
 {
-	u32 strn_length = (str_length > 0) ? str_length : (u32) strlen(hex_str);
+	u32 strn_length = (str_length > 0) ? str_length : (u32)std::strlen(hex_str);
 	u32 data_length = strn_length / 2;
 	char tmp_buf[3] = {0, 0, 0};
 
 	// Don't convert if the string length is odd.
-	if (!(strn_length % 2))
+	if ((strn_length % 2) == 0)
 	{
-		auto out = std::make_unique<u8[]>(strn_length * sizeof(u8));
-		u8 *pos = out.get();
-
-		while (strn_length--)
+		while (data_length--)
 		{
 			tmp_buf[0] = *hex_str++;
 			tmp_buf[1] = *hex_str++;
 
-			*pos++ = (u8)(hex_to_u64(tmp_buf) & 0xFF);
+			*data++ = (u8)(hex_to_u64(tmp_buf) & 0xFF);
 		}
-
-		// Copy back to our array.
-		memcpy(data, out.get(), data_length);
 	}
 }
 
@@ -123,7 +118,7 @@ void aesecb128_encrypt(unsigned char *key, unsigned char *in, unsigned char *out
 
 bool hmac_hash_compare(unsigned char *key, int key_len, unsigned char *in, int in_len, unsigned char *hash, int hash_len)
 {
-	std::unique_ptr<u8> out(new u8[key_len]);
+	std::unique_ptr<u8[]> out(new u8[key_len]);
 
 	sha1_hmac(key, key_len, in, in_len, out.get());
 
@@ -137,7 +132,7 @@ void hmac_hash_forge(unsigned char *key, int key_len, unsigned char *in, int in_
 
 bool cmac_hash_compare(unsigned char *key, int key_len, unsigned char *in, int in_len, unsigned char *hash, int hash_len)
 {
-	std::unique_ptr<u8> out(new u8[key_len]);
+	std::unique_ptr<u8[]> out(new u8[key_len]);
 
 	aes_context ctx;
 	aes_setkey_enc(&ctx, key, 128);

@@ -4,6 +4,7 @@
 #include <deque>
 #include <set>
 #include <mutex>
+#include <atomic>
 #include "GCM.h"
 #include "rsx_cache.h"
 #include "RSXTexture.h"
@@ -21,22 +22,12 @@
 #include "Utilities/variant.hpp"
 #include "define_new_memleakdetect.h"
 
+#include "Emu/Cell/lv2/sys_rsx.h"
+
 extern u64 get_system_time();
 
 extern bool user_asked_for_frame_capture;
 extern rsx::frame_capture_data frame_debug;
-
-namespace rsx
-{
-	namespace old_shaders_cache
-	{
-		enum class shader_language
-		{
-			glsl,
-			hlsl,
-		};
-	}
-}
 
 namespace rsx
 {
@@ -51,54 +42,6 @@ namespace rsx
 			tiles_count = 15,
 			zculls_count = 8,
 			color_buffers_count = 4
-		};
-	}
-
-	namespace old_shaders_cache
-	{
-		struct decompiled_shader
-		{
-			std::string code;
-		};
-
-		struct finalized_shader
-		{
-			u64 ucode_hash;
-			std::string code;
-		};
-
-		template<typename Type, typename KeyType = u64, typename Hasher = std::hash<KeyType>>
-		struct cache
-		{
-		private:
-			std::unordered_map<KeyType, Type, Hasher> m_entries;
-
-		public:
-			const Type* find(u64 key) const
-			{
-				auto found = m_entries.find(key);
-
-				if (found == m_entries.end())
-					return nullptr;
-
-				return &found->second;
-			}
-
-			void insert(KeyType key, const Type &shader)
-			{
-				m_entries.insert({ key, shader });
-			}
-		};
-
-		struct shaders_cache
-		{
-			cache<decompiled_shader> decompiled_fragment_shaders;
-			cache<decompiled_shader> decompiled_vertex_shaders;
-			cache<finalized_shader> finailized_fragment_shaders;
-			cache<finalized_shader> finailized_vertex_shaders;
-
-			void load(const std::string &path, shader_language lang);
-			void load(shader_language lang);
 		};
 	}
 
@@ -162,18 +105,47 @@ namespace rsx
 		std::vector<u32> inline_vertex_array;
 	};
 
+	struct interleaved_range_info
+	{
+		bool interleaved = false;
+		bool all_modulus = false;
+		bool single_vertex = false;
+		u32  base_offset = 0;
+		u32  real_offset_address = 0;
+		u8   memory_location = 0;
+		u8   attribute_stride = 0;
+		u16  min_divisor = 0;
+
+		std::vector<u8> locations;
+	};
+
+	enum attribute_buffer_placement : u8
+	{
+		none = 0,
+		persistent = 1,
+		transient = 2
+	};
+
+	struct vertex_input_layout
+	{
+		std::vector<interleaved_range_info> interleaved_blocks;  //Interleaved blocks to be uploaded as-is
+		std::vector<std::pair<u8, u32>> volatile_blocks;  //Volatile data blocks (immediate draw vertex data for example)
+		std::vector<u8> referenced_registers;  //Volatile register data
+
+		std::array<attribute_buffer_placement, 16> attribute_placement;
+	};
+
 	class thread : public named_thread
 	{
 		std::shared_ptr<thread_ctrl> m_vblank_thread;
 
 	protected:
 		std::stack<u32> m_call_stack;
+		std::array<push_buffer_vertex_info, 16> vertex_push_buffers;
+		std::vector<u32> element_push_buffer;
 
 	public:
-		old_shaders_cache::shaders_cache shaders_cache;
-		rsx::programs_cache programs_cache;
-
-		CellGcmControl* ctrl = nullptr;
+		RsxDmaControl* ctrl = nullptr;
 
 		Timer timer_sync;
 
@@ -189,37 +161,51 @@ namespace rsx
 	public:
 		std::shared_ptr<class ppu_thread> intr_thread;
 
-		u32 ioAddress, ioSize;
-		int flip_status;
-		int flip_mode;
-		int debug_level;
-		int frequency_mode;
+		// I hate this flag, but until hle is closer to lle, its needed
+		bool isHLE{ false };
 
-		u32 tiles_addr;
-		u32 zculls_addr;
-		vm::ps3::ptr<CellGcmDisplayInfo> gcm_buffers = vm::null;
-		u32 gcm_buffers_count;
-		u32 gcm_current_buffer;
+		u32 ioAddress, ioSize;
+		u32 flip_status;
+		int debug_level;
+
+		atomic_t<bool> requested_vsync{false};
+		atomic_t<bool> enable_second_vhandler{false};
+
+		RsxDisplayInfo display_buffers[8];
+		u32 display_buffers_count{0};
+		u32 current_display_buffer{0};
 		u32 ctxt_addr;
 		u32 label_addr;
 
 		u32 local_mem_addr, main_mem_addr;
-		bool strict_ordering[0x1000];
 
 		bool m_rtts_dirty;
 		bool m_transform_constants_dirty;
 		bool m_textures_dirty[16];
+
+	protected:
+		s32 m_skip_frame_ctr = 0;
+		bool skip_frame = false;
 	protected:
 		std::array<u32, 4> get_color_surface_addresses() const;
 		u32 get_zeta_surface_address() const;
-		RSXVertexProgram get_current_vertex_program() const;
+
+		/**
+		 * Analyze vertex inputs and group all interleaved blocks
+		 */
+		vertex_input_layout analyse_inputs_interleaved() const;
+
+		RSXVertexProgram current_vertex_program = {};
+		RSXFragmentProgram current_fragment_program = {};
+
+		void get_current_vertex_program();
 
 		/**
 		 * Gets current fragment program and associated fragment state
 		 * get_surface_info is a helper takes 2 parameters: rsx_texture_address and surface_is_depth
 		 * returns whether surface is a render target and surface pitch in native format
 		 */
-		RSXFragmentProgram get_current_fragment_program(std::function<std::tuple<bool, u16>(u32, fragment_texture&, bool)> get_surface_info) const;
+		void get_current_fragment_program(std::function<std::tuple<bool, u16>(u32, fragment_texture&, bool)> get_surface_info);
 	public:
 		double fps_limit = 59.94;
 
@@ -232,6 +218,14 @@ namespace rsx
 
 	public:
 		std::set<u32> m_used_gcm_commands;
+		bool invalid_command_interrupt_raised = false;
+		bool in_begin_end = false;
+
+		bool conditional_render_test_failed = false;
+		bool conditional_render_enabled = false;
+		bool zcull_stats_enabled = false;
+		bool zcull_rendering_enabled = false;
+		bool zcull_pixel_cnt_enabled = false;
 
 	protected:
 		thread();
@@ -256,17 +250,55 @@ namespace rsx
 
 		virtual void on_init_rsx() = 0;
 		virtual void on_init_thread() = 0;
-		virtual bool do_method(u32 cmd, u32 value) { return false; }
+		virtual bool do_method(u32 /*cmd*/, u32 /*value*/) { return false; }
 		virtual void flip(int buffer) = 0;
 		virtual u64 timestamp() const;
-		virtual bool on_access_violation(u32 address, bool is_writing) { return false; }
+		virtual bool on_access_violation(u32 /*address*/, bool /*is_writing*/) { return false; }
+		virtual void on_notify_memory_unmapped(u32 /*address_base*/, u32 /*size*/) {}
+
+		//zcull
+		virtual void notify_zcull_info_changed() {}
+		virtual void clear_zcull_stats(u32 /*type*/) {}
+		virtual u32 get_zcull_stats(u32 /*type*/) { return UINT16_MAX; }
 
 		gsl::span<const gsl::byte> get_raw_index_array(const std::vector<std::pair<u32, u32> >& draw_indexed_clause) const;
 		gsl::span<const gsl::byte> get_raw_vertex_buffer(const rsx::data_array_format_info&, u32 base_offset, const std::vector<std::pair<u32, u32>>& vertex_ranges) const;
 
-		std::vector<std::variant<vertex_array_buffer, vertex_array_register, empty_vertex_array>> get_vertex_buffers(const rsx::rsx_state& state, const std::vector<std::pair<u32, u32>>& vertex_ranges) const;
+		std::vector<std::variant<vertex_array_buffer, vertex_array_register, empty_vertex_array>>
+		get_vertex_buffers(const rsx::rsx_state& state, const std::vector<std::pair<u32, u32>>& vertex_ranges, const u64 consumed_attrib_mask) const;
+		
 		std::variant<draw_array_command, draw_indexed_array_command, draw_inlined_array>
 		get_draw_command(const rsx::rsx_state& state) const;
+
+		/**
+		* Immediate mode rendering requires a temp push buffer to hold attrib values
+		* Appends a value to the push buffer (currently only supports 32-wide types)
+		*/
+		void append_to_push_buffer(u32 attribute, u32 size, u32 subreg_index, vertex_base_type type, u32 value);
+		u32 get_push_buffer_vertex_count() const;
+
+		void append_array_element(u32 index);
+		u32 get_push_buffer_index_count() const;
+
+	protected:
+
+		/**
+		 * Computes VRAM requirements needed to upload raw vertex streams
+		 * result.first contains persistent memory requirements
+		 * result.second contains volatile memory requirements
+		 */
+		std::pair<u32, u32> calculate_memory_requirements(vertex_input_layout& layout, const u32 vertex_count);
+
+		/**
+		 * Generates vertex input descriptors as an array of 16x4 s32s
+		 */
+		void fill_vertex_layout_state(vertex_input_layout& layout, const u32 vertex_count, s32* buffer);
+
+		/**
+		 * Uploads vertex data described in the layout descriptor
+		 * Copies from local memory to the write-only output buffers provided in a sequential manner
+		 */
+		void write_vertex_data_to_memory(vertex_input_layout &layout, const u32 first_vertex, const u32 vertex_count, void *persistent_data, void *volatile_data);
 
 	private:
 		std::mutex m_mtx_task;
@@ -291,9 +323,15 @@ namespace rsx
 		/**
 		 * Fill buffer with 4x4 scale offset matrix.
 		 * Vertex shader's position is to be multiplied by this matrix.
-		 * if is_d3d is set, the matrix is modified to use d3d convention.
+		 * if flip_y is set, the matrix is modified to use d3d convention.
 		 */
-		void fill_scale_offset_data(void *buffer, bool is_d3d = true) const;
+		void fill_scale_offset_data(void *buffer, bool flip_y) const;
+
+		/**
+		 * Fill buffer with user clip information
+		*/
+
+		void fill_user_clip_data(void *buffer) const;
 
 		/**
 		* Fill buffer with vertex program constants.
@@ -332,10 +370,11 @@ namespace rsx
 
 		virtual std::pair<std::string, std::string> get_programs() const { return std::make_pair("", ""); };
 
-		struct raw_program get_raw_program() const;
+		virtual bool scaled_image_from_memory(blit_src_info& /*src_info*/, blit_dst_info& /*dst_info*/, bool /*interpolate*/){ return false;  }
+
 	public:
 		void reset();
-		void init(const u32 ioAddress, const u32 ioSize, const u32 ctrlAddress, const u32 localAddress);
+		void init(u32 ioAddress, u32 ioSize, u32 ctrlAddress, u32 localAddress);
 
 		tiled_region get_tiled_address(u32 offset, u32 location);
 		GcmTileInfo *find_tile(u32 offset, u32 location);

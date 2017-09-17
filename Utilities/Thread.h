@@ -230,6 +230,9 @@ public:
 
 		thread_ctrl::start(out, std::forward<F>(func));
 	}
+
+	static void set_native_priority(int priority);
+	static void set_ideal_processor_core(int core);
 };
 
 class named_thread
@@ -257,6 +260,9 @@ protected:
 
 	// Thread finalization (called after on_task)
 	virtual void on_exit() {}
+
+	// Called once upon thread spawn within the thread's own context
+	virtual void on_spawn() {}
 
 public:
 	// ID initialization

@@ -4,7 +4,7 @@
 
 #include "cellSearch.h"
 
-logs::channel cellSearch("cellSearch", logs::level::notice);
+logs::channel cellSearch("cellSearch");
 
 s32 cellSearchInitialize(CellSearchMode mode, u32 container, vm::ptr<CellSearchSystemCallback> func, vm::ptr<u32> userData)
 {
@@ -118,6 +118,12 @@ s32 cellSearchGetContentInfoDeveloperData()
 	return CELL_OK;
 }
 
+s32 cellSearchGetContentInfoSharable()
+{
+	UNIMPLEMENTED_FUNC(cellSearch);
+	return CELL_OK;
+}
+
 s32 cellSearchCancel()
 {
 	UNIMPLEMENTED_FUNC(cellSearch);
@@ -150,6 +156,7 @@ DECLARE(ppu_module_manager::cellSearch)("cellSearchUtility", []()
 	REG_FUNC(cellSearchUtility, cellSearchGetContentInfoPathMovieThumb);
 	REG_FUNC(cellSearchUtility, cellSearchPrepareFile);
 	REG_FUNC(cellSearchUtility, cellSearchGetContentInfoDeveloperData);
+	REG_FUNC(cellSearchUtility, cellSearchGetContentInfoSharable);
 	REG_FUNC(cellSearchUtility, cellSearchCancel);
 	REG_FUNC(cellSearchUtility, cellSearchEnd);
 });

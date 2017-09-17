@@ -1,6 +1,6 @@
 #include "stdafx.h"
-#include "Utilities/Config.h"
 #include "Utilities/lockless.h"
+#include "Utilities/sysinfo.h"
 #include "Emu/Memory/Memory.h"
 #include "Emu/System.h"
 
@@ -20,6 +20,10 @@
 
 #include <cmath>
 #include <cfenv>
+#include <atomic>
+#include <thread>
+
+const bool s_use_rtm = utils::has_rtm();
 
 #ifdef _MSC_VER
 bool operator ==(const u128& lhs, const u128& rhs)
@@ -29,27 +33,106 @@ bool operator ==(const u128& lhs, const u128& rhs)
 #endif
 
 extern u64 get_timebased_time();
+extern u64 get_system_time();
 
 extern thread_local u64 g_tls_fault_spu;
 
-enum class spu_decoder_type
-{
-	precise,
-	fast,
-	asmjit,
-	llvm,
-};
-
-cfg::map_entry<spu_decoder_type> g_cfg_spu_decoder(cfg::root.core, "SPU Decoder", 2,
-{
-	{ "Interpreter (precise)", spu_decoder_type::precise },
-	{ "Interpreter (fast)", spu_decoder_type::fast },
-	{ "Recompiler (ASMJIT)", spu_decoder_type::asmjit },
-	{ "Recompiler (LLVM)", spu_decoder_type::llvm },
-});
-
 const spu_decoder<spu_interpreter_precise> s_spu_interpreter_precise;
 const spu_decoder<spu_interpreter_fast> s_spu_interpreter_fast;
+
+std::atomic<u64> g_num_spu_threads = { 0ull };
+
+template <>
+void fmt_class_string<spu_decoder_type>::format(std::string& out, u64 arg)
+{
+	format_enum(out, arg, [](spu_decoder_type type)
+	{
+		switch (type)
+		{
+		case spu_decoder_type::precise: return "Interpreter (precise)";
+		case spu_decoder_type::fast: return "Interpreter (fast)";
+		case spu_decoder_type::asmjit: return "Recompiler (ASMJIT)";
+		case spu_decoder_type::llvm: return "Recompiler (LLVM)";
+		}
+
+		return unknown;
+	});
+}
+
+namespace spu
+{
+	namespace scheduler
+	{
+		std::array<std::atomic<u8>, 65536> atomic_instruction_table = {};
+		constexpr u32 native_jiffy_duration_us = 1500; //About 1ms resolution with a half offset
+
+		void acquire_pc_address(u32 pc, u32 timeout_ms = 3)
+		{
+			const u8 max_concurrent_instructions = (u8)g_cfg.core.preferred_spu_threads;
+			const u32 pc_offset = pc >> 2;
+
+			if (atomic_instruction_table[pc_offset].load(std::memory_order_consume) >= max_concurrent_instructions)
+			{
+				if (timeout_ms > 0)
+				{
+					const auto timeout = timeout_ms * 1000u; //convert to microseconds
+					const auto start = get_system_time();
+					auto remaining = timeout;
+
+					while (atomic_instruction_table[pc_offset].load(std::memory_order_consume) >= max_concurrent_instructions)
+					{
+						if (remaining >= native_jiffy_duration_us)
+							std::this_thread::sleep_for(1ms);
+						else
+							std::this_thread::yield();
+
+						const auto now = get_system_time();
+						const auto elapsed = now - start;
+
+						if (elapsed > timeout) break;
+						remaining = timeout - elapsed;
+					}
+				}
+				else
+				{
+					//Slight pause if function is overburdened
+					thread_ctrl::wait_for(100);
+				}
+			}
+
+			atomic_instruction_table[pc_offset]++;
+		}
+
+		void release_pc_address(u32 pc)
+		{
+			const u32 pc_offset = pc >> 2;
+
+			atomic_instruction_table[pc_offset]--;
+		}
+
+		struct concurrent_execution_watchdog
+		{
+			u32 pc = 0;
+			bool active = false;
+
+			concurrent_execution_watchdog(SPUThread& spu)
+				:pc(spu.pc)
+			{
+				if (g_cfg.core.preferred_spu_threads > 0)
+				{
+					acquire_pc_address(pc, (u32)g_cfg.core.spu_delay_penalty);
+					active = true;
+				}
+			}
+
+			~concurrent_execution_watchdog()
+			{
+				if (active)
+					release_pc_address(pc);
+			}
+		};
+	}
+}
 
 void spu_int_ctrl_t::set(u64 ints)
 {
@@ -132,6 +215,29 @@ spu_imm_table_t::spu_imm_table_t()
 	}
 }
 
+void SPUThread::on_spawn()
+{
+	if (g_cfg.core.bind_spu_cores)
+	{
+		//Get next secondary core number
+		auto core_count = std::thread::hardware_concurrency();
+		if (core_count > 0 && core_count <= 16)
+		{
+			auto half_count = core_count / 2;
+			auto assigned_secondary_core = ((g_num_spu_threads % half_count) * 2) + 1;
+
+			thread_ctrl::set_ideal_processor_core((s32)assigned_secondary_core);
+		}
+	}
+
+	if (g_cfg.core.lower_spu_priority)
+	{
+		thread_ctrl::set_native_priority(-1);
+	}
+
+	g_num_spu_threads++;
+}
+
 void SPUThread::on_init(const std::shared_ptr<void>& _this)
 {
 	if (!offset)
@@ -168,6 +274,7 @@ void SPUThread::cpu_init()
 	srr0 = 0;
 	ch_tag_upd = 0;
 	ch_tag_mask = 0;
+	mfc_prxy_mask = 0;
 	ch_tag_stat.data.store({});
 	ch_stall_mask = 0;
 	ch_stall_stat.data.store({});
@@ -206,8 +313,8 @@ extern thread_local std::string(*g_tls_log_prefix)();
 void SPUThread::cpu_task()
 {
 	std::fesetround(FE_TOWARDZERO);
-
-	if (g_cfg_spu_decoder.get() == spu_decoder_type::asmjit)
+	
+	if (g_cfg.core.spu_decoder == spu_decoder_type::asmjit)
 	{
 		if (!spu_db) spu_db = fxm::get_always<SPUDatabase>();
 		return spu_recompiler_base::enter(*this);
@@ -222,8 +329,8 @@ void SPUThread::cpu_task()
 
 	// Select opcode table
 	const auto& table = *(
-		g_cfg_spu_decoder.get() == spu_decoder_type::precise ? &s_spu_interpreter_precise.get_table() :
-		g_cfg_spu_decoder.get() == spu_decoder_type::fast ? &s_spu_interpreter_fast.get_table() :
+		g_cfg.core.spu_decoder == spu_decoder_type::precise ? &s_spu_interpreter_precise.get_table() :
+		g_cfg.core.spu_decoder == spu_decoder_type::fast ? &s_spu_interpreter_fast.get_table() :
 		(fmt::throw_exception<std::logic_error>("Invalid SPU decoder"), nullptr));
 
 	// LS base address
@@ -456,22 +563,27 @@ void SPUThread::do_dma_transfer(const spu_mfc_cmd& args, bool from_mfc)
 
 void SPUThread::process_mfc_cmd()
 {
+	spu::scheduler::concurrent_execution_watchdog watchdog(*this);
 	LOG_TRACE(SPU, "DMAC: cmd=%s, lsa=0x%x, ea=0x%llx, tag=0x%x, size=0x%x", ch_mfc_cmd.cmd, ch_mfc_cmd.lsa, ch_mfc_cmd.eal, ch_mfc_cmd.tag, ch_mfc_cmd.size);
 
 	const auto mfc = fxm::check_unlocked<mfc_thread>();
+	const u32 max_imm_dma_size = g_cfg.core.max_spu_immediate_write_size;
 
 	// Check queue size
-	while (mfc_queue.size() >= 16)
+	auto check_queue_size = [&]()
 	{
-		if (test(state, cpu_flag::stop + cpu_flag::dbg_global_stop))
+		while (mfc_queue.size() >= 16)
 		{
-			return;
-		}
+			if (test(state, cpu_flag::stop + cpu_flag::dbg_global_stop))
+			{
+				return;
+			}
 
-		// TODO: investigate lost notifications
-		busy_wait();
-		_mm_lfence();
-	}
+			// TODO: investigate lost notifications
+			std::this_thread::yield();
+			_mm_lfence();
+		}
+	};
 
 	switch (ch_mfc_cmd.cmd)
 	{
@@ -513,9 +625,22 @@ void SPUThread::process_mfc_cmd()
 				thread_ctrl::wait_for(100);
 			}
 		}
+		else if (s_use_rtm && utils::transaction_enter())
+		{
+			if (!vm::reader_lock{vm::try_to_lock})
+			{
+				_xabort(0);
+			}
+
+			rtime = vm::reservation_acquire(raddr, 128);
+			rdata = data;
+			_xend();
+
+			_ref<decltype(rdata)>(ch_mfc_cmd.lsa & 0x3ffff) = rdata;
+			return ch_atomic_stat.set_value(MFC_GETLLAR_SUCCESS);
+		}
 		else
 		{
-			// Fast path
 			rdata = data;
 			_mm_lfence();
 		}
@@ -546,15 +671,36 @@ void SPUThread::process_mfc_cmd()
 		if (raddr == ch_mfc_cmd.eal && rtime == vm::reservation_acquire(raddr, 128) && rdata == data)
 		{
 			// TODO: vm::check_addr
-			vm::writer_lock lock;
-
-			if (rtime == vm::reservation_acquire(raddr, 128) && rdata == data)
+			if (s_use_rtm && utils::transaction_enter())
 			{
-				data = to_write;
-				result = true;
+				if (!vm::reader_lock{vm::try_to_lock})
+				{
+					_xabort(0);
+				}
 
-				vm::reservation_update(raddr, 128);
-				vm::notify(raddr, 128);
+				if (rtime == vm::reservation_acquire(raddr, 128) && rdata == data)
+				{
+					data = to_write;
+					result = true;
+
+					vm::reservation_update(raddr, 128);
+					vm::notify(raddr, 128);
+				}
+
+				_xend();
+			}
+			else
+			{
+				vm::writer_lock lock;
+
+				if (rtime == vm::reservation_acquire(raddr, 128) && rdata == data)
+				{
+					data = to_write;
+					result = true;
+
+					vm::reservation_update(raddr, 128);
+					vm::notify(raddr, 128);
+				}
 			}
 		}
 
@@ -586,8 +732,27 @@ void SPUThread::process_mfc_cmd()
 		auto& data = vm::ps3::_ref<decltype(rdata)>(ch_mfc_cmd.eal);
 		const auto to_write = _ref<decltype(rdata)>(ch_mfc_cmd.lsa & 0x3ffff);
 
+		vm::reservation_acquire(ch_mfc_cmd.eal, 128);
+
 		// Store unconditionally
 		// TODO: vm::check_addr
+
+		if (s_use_rtm && utils::transaction_enter())
+		{
+			if (!vm::reader_lock{vm::try_to_lock})
+			{
+				_xabort(0);
+			}
+
+			data = to_write;
+			vm::reservation_update(ch_mfc_cmd.eal, 128);
+			vm::notify(ch_mfc_cmd.eal, 128);
+			_xend();
+
+			ch_atomic_stat.set_value(MFC_PUTLLUC_SUCCESS);
+			return;
+		}
+
 		vm::writer_lock lock(0);
 		data = to_write;
 		vm::reservation_update(ch_mfc_cmd.eal, 128);
@@ -619,7 +784,7 @@ void SPUThread::process_mfc_cmd()
 	case MFC_GETF_CMD:
 	{
 		// Try to process small transfers immediately
-		if (ch_mfc_cmd.size <= 256 && mfc_queue.size() == 0)
+		if (ch_mfc_cmd.size <= max_imm_dma_size && mfc_queue.size() == 0)
 		{
 			vm::reader_lock lock(vm::try_to_lock);
 
@@ -650,7 +815,7 @@ void SPUThread::process_mfc_cmd()
 	case MFC_GETLB_CMD:
 	case MFC_GETLF_CMD:
 	{
-		if (ch_mfc_cmd.size <= 16 * 8 && mfc_queue.size() == 0 && (ch_stall_mask & (1u << ch_mfc_cmd.tag)) == 0)
+		if (ch_mfc_cmd.size <= max_imm_dma_size && mfc_queue.size() == 0 && (ch_stall_mask & (1u << ch_mfc_cmd.tag)) == 0)
 		{
 			vm::reader_lock lock(vm::try_to_lock);
 
@@ -668,7 +833,7 @@ void SPUThread::process_mfc_cmd()
 			
 			u32 total_size = 0;
 
-			while (ch_mfc_cmd.size && total_size < 256)
+			while (ch_mfc_cmd.size && total_size <= max_imm_dma_size)
 			{
 				ch_mfc_cmd.lsa &= 0x3fff0;
 
@@ -684,7 +849,7 @@ void SPUThread::process_mfc_cmd()
 
 				if (size)
 				{
-					if (total_size + size > 256)
+					if (total_size + size > max_imm_dma_size)
 					{
 						break;
 					}
@@ -742,6 +907,7 @@ void SPUThread::process_mfc_cmd()
 	}
 
 	// Enqueue
+	check_queue_size();
 	verify(HERE), mfc_queue.try_push(ch_mfc_cmd);
 
 	//if (test(mfc->state, cpu_flag::is_waiting))
@@ -844,11 +1010,15 @@ bool SPUThread::get_ch_value(u32 ch, u32& out)
 
 	auto read_channel = [&](spu_channel_t& channel)
 	{
+		if (channel.try_pop(out))
+			return true;
+
 		for (int i = 0; i < 10 && channel.get_count() == 0; i++)
 		{
 			busy_wait();
 		}
 
+		u32 ctr = 0;
 		while (!channel.try_pop(out))
 		{
 			if (test(state, cpu_flag::stop))
@@ -856,7 +1026,16 @@ bool SPUThread::get_ch_value(u32 ch, u32& out)
 				return false;
 			}
 
-			thread_ctrl::wait();
+			if (ctr > 10000)
+			{
+				ctr = 0;
+				std::this_thread::yield();
+			}
+			else
+			{
+				ctr++;
+				thread_ctrl::wait();
+			}
 		}
 
 		return true;
@@ -931,6 +1110,11 @@ bool SPUThread::get_ch_value(u32 ch, u32& out)
 	case SPU_RdDec:
 	{
 		out = ch_dec_value - (u32)(get_timebased_time() - ch_dec_start_timestamp);
+
+		//Polling: We might as well hint to the scheduler to slot in another thread since this one is counting down
+		if (g_cfg.core.spu_loop_detection && out > spu::scheduler::native_jiffy_duration_us)
+			std::this_thread::yield();
+
 		return true;
 	}
 
@@ -1179,7 +1363,12 @@ bool SPUThread::set_ch_value(u32 ch, u32 value)
 		ch_tag_stat.set_value(0, false);
 		ch_tag_upd = value;
 
-		if (mfc_queue.size() == 0 && (!value || ch_tag_upd.exchange(0)))
+		if (ch_tag_mask == 0)
+		{
+			// TODO
+			ch_tag_stat.set_value(0);
+		}
+		else if (mfc_queue.size() == 0 && (!value || ch_tag_upd.exchange(0)))
 		{
 			ch_tag_stat.set_value(ch_tag_mask);
 		}

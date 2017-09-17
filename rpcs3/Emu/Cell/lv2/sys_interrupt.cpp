@@ -10,7 +10,7 @@
 
 namespace vm { using namespace ps3; }
 
-logs::channel sys_interrupt("sys_interrupt", logs::level::notice);
+logs::channel sys_interrupt("sys_interrupt");
 
 void lv2_int_serv::exec()
 {
@@ -149,10 +149,4 @@ void sys_interrupt_thread_eoi(ppu_thread& ppu)
 	sys_interrupt.trace("sys_interrupt_thread_eoi()");
 
 	ppu.state += cpu_flag::ret;
-
-	// Throw if this syscall was not called directly by the SC instruction (hack)
-	if (ppu.lr == 0 || ppu.gpr[11] != 88)
-	{
-		throw cpu_flag::ret;
-	}
 }

@@ -719,7 +719,40 @@ void spu_interpreter::ANDC(SPUThread& spu, spu_opcode_t op)
 
 void spu_interpreter_fast::FCGT(SPUThread& spu, spu_opcode_t op)
 {
-	spu.gpr[op.rt].vf = _mm_cmplt_ps(spu.gpr[op.rb].vf, spu.gpr[op.ra].vf);
+	// IMPL NOTES:
+	// if (v is inf) v = (inf - 1) i.e nearest normal value to inf with mantissa bits left intact
+	// if (v is denormalized) v = 0 flush denormals
+	// return v1 > v2
+	// branching simulated using bitwise ops and_not+or
+
+	const auto zero = _mm_set1_ps(0.f);
+	const auto nan_check_a = _mm_cmpunord_ps(spu.gpr[op.ra].vf, zero);    //mask true where a is extended
+	const auto nan_check_b = _mm_cmpunord_ps(spu.gpr[op.rb].vf, zero);    //mask true where b is extended
+
+	//calculate lowered a and b. The mantissa bits are left untouched for now unless its proven they should be flushed
+	const auto last_exp_bit = _mm_castsi128_ps(_mm_set1_epi32(0x00800000));
+	const auto lowered_a =_mm_andnot_ps(last_exp_bit, spu.gpr[op.ra].vf);      //a is lowered to largest unextended value with sign
+	const auto lowered_b = _mm_andnot_ps(last_exp_bit, spu.gpr[op.rb].vf);		//b is lowered to largest unextended value with sign
+
+	//check if a and b are denormalized
+	const auto all_exp_bits = _mm_castsi128_ps(_mm_set1_epi32(0x7f800000));
+	const auto denorm_check_a = _mm_cmpeq_ps(zero, _mm_and_ps(all_exp_bits, spu.gpr[op.ra].vf));
+	const auto denorm_check_b = _mm_cmpeq_ps(zero, _mm_and_ps(all_exp_bits, spu.gpr[op.rb].vf));
+
+	//set a and b to their lowered values if they are extended
+	const auto a_values_lowered = _mm_and_ps(nan_check_a, lowered_a);
+	const auto original_a_masked = _mm_andnot_ps(nan_check_a, spu.gpr[op.ra].vf);
+	const auto a_final1 = _mm_or_ps(a_values_lowered, original_a_masked);
+
+	const auto b_values_lowered = _mm_and_ps(nan_check_b, lowered_b);
+	const auto original_b_masked = _mm_andnot_ps(nan_check_b, spu.gpr[op.rb].vf);
+	const auto b_final1 = _mm_or_ps(b_values_lowered, original_b_masked);
+
+	//Flush denormals to zero
+	const auto final_a = _mm_andnot_ps(denorm_check_a, a_final1);
+	const auto final_b = _mm_andnot_ps(denorm_check_b, b_final1);
+
+	spu.gpr[op.rt].vf = _mm_cmplt_ps(final_b, final_a);
 }
 
 void spu_interpreter::DFCGT(SPUThread& spu, spu_opcode_t op)
@@ -754,8 +787,28 @@ void spu_interpreter::ORC(SPUThread& spu, spu_opcode_t op)
 
 void spu_interpreter_fast::FCMGT(SPUThread& spu, spu_opcode_t op)
 {
-	const auto mask = _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff));
-	spu.gpr[op.rt].vf = _mm_cmplt_ps(_mm_and_ps(spu.gpr[op.rb].vf, mask), _mm_and_ps(spu.gpr[op.ra].vf, mask));
+	//IMPL NOTES: See FCGT
+
+	const auto zero = _mm_set1_ps(0.f);
+	const auto nan_check_a = _mm_cmpunord_ps(spu.gpr[op.ra].vf, zero);    //mask true where a is extended
+	const auto nan_check_b = _mm_cmpunord_ps(spu.gpr[op.rb].vf, zero);    //mask true where b is extended
+
+	//check if a and b are denormalized
+	const auto all_exp_bits = _mm_castsi128_ps(_mm_set1_epi32(0x7f800000));
+	const auto denorm_check_a = _mm_cmpeq_ps(zero, _mm_and_ps(all_exp_bits, spu.gpr[op.ra].vf));
+	const auto denorm_check_b = _mm_cmpeq_ps(zero, _mm_and_ps(all_exp_bits, spu.gpr[op.rb].vf));
+
+	//Flush denormals to zero
+	const auto final_a = _mm_andnot_ps(denorm_check_a, spu.gpr[op.ra].vf);
+	const auto final_b = _mm_andnot_ps(denorm_check_b, spu.gpr[op.rb].vf);
+
+	//Mask to make a > b if a is extended but b is not (is this necessary on x86?)
+	const auto nan_mask = _mm_andnot_ps(nan_check_b, _mm_xor_ps(nan_check_a, nan_check_b));
+
+	const auto sign_mask = _mm_castsi128_ps(_mm_set1_epi32(0x7fffffff));
+	const auto comparison = _mm_cmplt_ps(_mm_and_ps(final_b, sign_mask), _mm_and_ps(final_a, sign_mask));
+
+	spu.gpr[op.rt].vf = _mm_or_ps(comparison, nan_mask);
 }
 
 void spu_interpreter::DFCMGT(SPUThread& spu, spu_opcode_t op)
@@ -1297,17 +1350,50 @@ void spu_interpreter::MPYA(SPUThread& spu, spu_opcode_t op)
 
 void spu_interpreter_fast::FNMS(SPUThread& spu, spu_opcode_t op)
 {
-	spu.gpr[op.rt4].vf = _mm_sub_ps(spu.gpr[op.rc].vf, _mm_mul_ps(spu.gpr[op.ra].vf, spu.gpr[op.rb].vf));
+	const u32 test_bits = 0x7f800000;
+	auto mask = _mm_set1_ps((f32&)test_bits);
+
+	auto test_a = _mm_and_ps(spu.gpr[op.ra].vf, mask);
+	auto mask_a = _mm_cmpneq_ps(test_a, mask);
+	auto test_b = _mm_and_ps(spu.gpr[op.rb].vf, mask);
+	auto mask_b = _mm_cmpneq_ps(test_b, mask);
+
+	auto a = _mm_and_ps(spu.gpr[op.ra].vf, mask_a);
+	auto b = _mm_and_ps(spu.gpr[op.rb].vf, mask_b);
+
+	spu.gpr[op.rt4].vf = _mm_sub_ps(spu.gpr[op.rc].vf, _mm_mul_ps(a, b));
 }
 
 void spu_interpreter_fast::FMA(SPUThread& spu, spu_opcode_t op)
 {
-	spu.gpr[op.rt4].vf = _mm_add_ps(_mm_mul_ps(spu.gpr[op.ra].vf, spu.gpr[op.rb].vf), spu.gpr[op.rc].vf);
+	const u32 test_bits = 0x7f800000;
+	auto mask = _mm_set1_ps((f32&)test_bits);
+
+	auto test_a = _mm_and_ps(spu.gpr[op.ra].vf, mask);
+	auto mask_a = _mm_cmpneq_ps(test_a, mask);
+	auto test_b = _mm_and_ps(spu.gpr[op.rb].vf, mask);
+	auto mask_b = _mm_cmpneq_ps(test_b, mask);
+
+	auto a = _mm_and_ps(spu.gpr[op.ra].vf, mask_a);
+	auto b = _mm_and_ps(spu.gpr[op.rb].vf, mask_b);
+
+	spu.gpr[op.rt4].vf = _mm_add_ps(_mm_mul_ps(a, b), spu.gpr[op.rc].vf);
 }
 
 void spu_interpreter_fast::FMS(SPUThread& spu, spu_opcode_t op)
 {
-	spu.gpr[op.rt4].vf = _mm_sub_ps(_mm_mul_ps(spu.gpr[op.ra].vf, spu.gpr[op.rb].vf), spu.gpr[op.rc].vf);
+	const u32 test_bits = 0x7f800000;
+	auto mask = _mm_set1_ps((f32&)test_bits);
+
+	auto test_a = _mm_and_ps(spu.gpr[op.ra].vf, mask);
+	auto mask_a = _mm_cmpneq_ps(test_a, mask);
+	auto test_b = _mm_and_ps(spu.gpr[op.rb].vf, mask);
+	auto mask_b = _mm_cmpneq_ps(test_b, mask);
+
+	auto a = _mm_and_ps(spu.gpr[op.ra].vf, mask_a);
+	auto b = _mm_and_ps(spu.gpr[op.rb].vf, mask_b);
+
+	spu.gpr[op.rt4].vf = _mm_sub_ps(_mm_mul_ps(a, b), spu.gpr[op.rc].vf);
 }
 
 static void SetHostRoundingMode(u32 rn)
@@ -1347,11 +1433,6 @@ inline bool issnan(float x)
 	return std::isnan(x) && ((s32&)x) << 9 > 0;
 }
 
-inline int fexpf(float x)
-{
-	return ((u32&)x >> 23) & 0xFF;
-}
-
 inline bool isextended(float x)
 {
 	return fexpf(x) == 255;
@@ -1372,22 +1453,12 @@ inline float ldexpf_extended(float x, int exp)  // ldexpf() for extended values,
 
 inline bool isdenormal(float x)
 {
-	const int fpc = std::fpclassify(x);
-#ifdef __GNUG__
-	return fpc == FP_SUBNORMAL;
-#else
-	return (fpc & (_FPCLASS_PD | _FPCLASS_ND)) != 0;
-#endif
+	return std::fpclassify(x) == FP_SUBNORMAL;
 }
 
 inline bool isdenormal(double x)
 {
-	const int fpc = std::fpclassify(x);
-#ifdef __GNUG__
-	return fpc == FP_SUBNORMAL;
-#else
-	return (fpc & (_FPCLASS_PD | _FPCLASS_ND)) != 0;
-#endif
+	return std::fpclassify(x) == FP_SUBNORMAL;
 }
 
 void spu_interpreter_precise::FREST(SPUThread& spu, spu_opcode_t op)

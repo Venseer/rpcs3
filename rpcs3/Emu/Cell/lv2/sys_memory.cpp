@@ -3,7 +3,7 @@
 
 namespace vm { using namespace ps3; }
 
-logs::channel sys_memory("sys_memory", logs::level::notice);
+logs::channel sys_memory("sys_memory");
 
 error_code sys_memory_allocate(u32 size, u64 flags, vm::ptr<u32> alloc_addr)
 {
@@ -12,6 +12,7 @@ error_code sys_memory_allocate(u32 size, u64 flags, vm::ptr<u32> alloc_addr)
 	// Check allocation size
 	switch (flags)
 	{
+	case 0:		//handle "default" value, issue 2510
 	case SYS_MEMORY_PAGE_SIZE_1M:
 	{
 		if (size % 0x100000)
@@ -122,7 +123,7 @@ error_code sys_memory_free(u32 addr)
 	verify(HERE), area;
 
 	// Deallocate memory
-	u32 cid, size = area->dealloc(addr, &cid);
+	u32 cid, size = area->dealloc(addr, nullptr, &cid);
 
 	if (!size)
 	{

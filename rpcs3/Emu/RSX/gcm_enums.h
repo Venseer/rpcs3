@@ -5,11 +5,11 @@ namespace rsx
 {
 	enum class vertex_base_type : u8
 	{
-		s1, ///< signed byte
+		s1, ///< signed normalized 16-bit int
 		f, ///< float
 		sf, ///< half float
 		ub, ///< unsigned byte interpreted as 0.f and 1.f
-		s32k, ///< signed 32bits int
+		s32k, ///< signed 16bits int
 		cmp, ///< compressed aka X11G11Z10 and always 1. W.
 		ub256, ///< unsigned byte interpreted as between 0 and 255.
 	};
@@ -406,7 +406,7 @@ enum
 
 enum
 {
-	CELL_GCM_DISPLAY_FLIP_STATUS_ = 0,
+	CELL_GCM_DISPLAY_FLIP_STATUS_DONE = 0,
 	CELL_GCM_DISPLAY_FLIP_STATUS_WAITING = 1,
 };
 
@@ -592,6 +592,14 @@ enum
 	CELL_GCM_CW = 0x0900,
 	CELL_GCM_CCW = 0x0901,
 
+	CELL_GCM_INVERT = 0x150A,
+	CELL_GCM_KEEP = 0x1E00,
+	CELL_GCM_REPLACE = 0x1E01,
+	CELL_GCM_INCR = 0x1E02,
+	CELL_GCM_DECR = 0x1E03,
+	CELL_GCM_INCR_WRAP = 0x8507,
+	CELL_GCM_DECR_WRAP = 0x8508,
+
 	CELL_GCM_TRANSFER_LOCAL_TO_LOCAL = 0,
 	CELL_GCM_TRANSFER_MAIN_TO_LOCAL = 1,
 	CELL_GCM_TRANSFER_LOCAL_TO_MAIN = 2,
@@ -696,7 +704,7 @@ enum
 {
 	CELL_GCM_CONTEXT_DMA_MEMORY_FRAME_BUFFER = 0xFEED0000, // Local memory
 	CELL_GCM_CONTEXT_DMA_MEMORY_HOST_BUFFER = 0xFEED0001, // Main memory
-	CELL_GCM_CONTEXT_DMA_TO_MEMORY_GET_REPORT = 0x66626660,
+	CELL_GCM_CONTEXT_DMA_REPORT_LOCATION_LOCAL = 0x66626660,
 	CELL_GCM_CONTEXT_DMA_REPORT_LOCATION_MAIN = 0xBAD68000,
 	CELL_GCM_CONTEXT_DMA_NOTIFY_MAIN_0 = 0x6660420F,
 
@@ -1000,7 +1008,11 @@ enum
 	NV3089_IMAGE_IN_OFFSET = 0x0000C408 >> 2,
 	NV3089_IMAGE_IN = 0x0000C40C >> 2,
 
-	GCM_SET_USER_COMMAND = 0x0000EB00 >> 2,
+	//lv1 hypervisor commands
+	GCM_SET_DRIVER_OBJECT = 0x0000E000 >> 2,
+	GCM_FLIP_HEAD = 0X0000E920 >> 2,          //0xE920:0xE924: Flip head 0 or 1
+	GCM_DRIVER_QUEUE = 0X0000E940 >> 2,       //0XE940:0xE95C: First two indices prepare display buffers, rest unknown
+	GCM_SET_USER_COMMAND = 0x0000EB00 >> 2,   //0xEB00:0xEB04: User interrupt
 
 	GCM_FLIP_COMMAND = 0x0000FEAC >> 2
 };

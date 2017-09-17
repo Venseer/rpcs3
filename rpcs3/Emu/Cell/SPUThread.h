@@ -504,6 +504,7 @@ public:
 class SPUThread : public cpu_thread
 {
 public:
+	virtual void on_spawn() override;
 	virtual void on_init(const std::shared_ptr<void>&) override;
 	virtual std::string get_name() const override;
 	virtual std::string dump() const override;
@@ -549,6 +550,8 @@ public:
 
 	spu_channel_4_t ch_in_mbox;
 
+	atomic_t<u32> mfc_prxy_mask;
+
 	spu_channel_t ch_out_mbox;
 	spu_channel_t ch_out_intr_mbox;
 
@@ -581,6 +584,7 @@ public:
 
 	std::exception_ptr pending_exception;
 
+	std::array<struct spu_function_t*, 65536> compiled_cache{};
 	std::shared_ptr<class SPUDatabase> spu_db;
 	std::shared_ptr<class spu_recompiler_base> spu_rec;
 	u32 recursion_level = 0;

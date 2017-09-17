@@ -1,22 +1,6 @@
 #include "stdafx.h"
 #include "GLCommonDecompiler.h"
 
-std::string getFloatTypeNameImpl(size_t elementCount)
-{
-	switch (elementCount)
-	{
-	default:
-		abort();
-	case 1:
-		return "float";
-	case 2:
-		return "vec2";
-	case 3:
-		return "vec3";
-	case 4:
-		return "vec4";
-	}
-}
 
 std::string getFunctionImpl(FUNCTION f)
 {
@@ -61,7 +45,7 @@ std::string getFunctionImpl(FUNCTION f)
 	case FUNCTION::FUNCTION_TEXTURE_SAMPLECUBE:
 		return "texture($t, $0.xyz)";
 	case FUNCTION::FUNCTION_TEXTURE_SAMPLECUBE_PROJ:
-		return "textureProj($t, $0.xyzw, $1.x)"; // Note: $1.x is bias
+		return "texture($t, ($0.xyz / $0.w))";
 	case FUNCTION::FUNCTION_TEXTURE_SAMPLECUBE_LOD:
 		return "textureLod($t, $0.xyz, $1.x)";
 	case FUNCTION::FUNCTION_TEXTURE_SAMPLECUBE_GRAD:
@@ -81,53 +65,6 @@ std::string getFunctionImpl(FUNCTION f)
 	case FUNCTION::FUNCTION_VERTEX_TEXTURE_FETCH2D:
 		return "textureLod($t, $0.xy, 0)";
 	case FUNCTION::FUNCTION_TEXTURE_SAMPLE2D_DEPTH_RGBA:
-		return "texture2DReconstruct($t, $0.xy)";
+		return "texture2DReconstruct($t, $0.xy * $t_coord_scale)";
 	}
-}
-
-std::string compareFunctionImpl(COMPARE f, const std::string &Op0, const std::string &Op1)
-{
-	switch (f)
-	{
-	case COMPARE::FUNCTION_SEQ:
-		return "equal(" + Op0 + ", " + Op1 + ")";
-	case COMPARE::FUNCTION_SGE:
-		return "greaterThanEqual(" + Op0 + ", " + Op1 + ")";
-	case COMPARE::FUNCTION_SGT:
-		return "greaterThan(" + Op0 + ", " + Op1 + ")";
-	case COMPARE::FUNCTION_SLE:
-		return "lessThanEqual(" + Op0 + ", " + Op1 + ")";
-	case COMPARE::FUNCTION_SLT:
-		return "lessThan(" + Op0 + ", " + Op1 + ")";
-	case COMPARE::FUNCTION_SNE:
-		return "notEqual(" + Op0 + ", " + Op1 + ")";
-	}
-	fmt::throw_exception("Unknown compare function" HERE);
-}
-
-void insert_glsl_legacy_function(std::ostream& OS)
-{
-	OS << "vec4 lit_legacy(vec4 val)";
-	OS << "{\n";
-	OS << "	vec4 clamped_val = val;\n";
-	OS << "	clamped_val.x = max(val.x, 0);\n";
-	OS << "	clamped_val.y = max(val.y, 0);\n";
-	OS << "	vec4 result;\n";
-	OS << "	result.x = 1.0;\n";
-	OS << "	result.w = 1.;\n";
-	OS << "	result.y = clamped_val.x;\n";
-	OS << "	result.z = clamped_val.x > 0.0 ? exp(clamped_val.w * log(max(clamped_val.y, 1.E-10))) : 0.0;\n";
-	OS << "	return result;\n";
-	OS << "}\n\n";
-
-	//NOTE: We lose precision if we just store depth value into 8-bit textures i.e (depth, 0, 0)
-	OS << "vec4 texture2DReconstruct(sampler2D tex, vec2 coord)\n";
-	OS << "{\n";
-	OS << "	float depth_value = texture(tex, coord.xy).r;\n";
-	OS << "	uint value = uint(depth_value * 16777215);\n";
-	OS << "	uint b = (value & 0xff);\n";
-	OS << "	uint g = (value >> 8) & 0xff;\n";
-	OS << "	uint r = (value >> 16) & 0xff;\n";
-	OS << "	return vec4(float(r)/255., float(g)/255., float(b)/255., 1.);\n";
-	OS << "}\n\n";
 }

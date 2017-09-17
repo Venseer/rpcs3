@@ -216,7 +216,7 @@ struct rsx_vertex_input
 	bool int_type;
 	u32 flags;		//Initially zero, to be optionally filled by the backend
 
-	bool operator==(const rsx_vertex_input other) const
+	bool operator==(const rsx_vertex_input& other) const
 	{
 		return location == other.location && size == other.size && frequency == other.frequency && is_modulo == other.is_modulo &&
 			is_array == other.is_array && int_type == other.int_type && flags == other.flags;
@@ -228,4 +228,5 @@ struct RSXVertexProgram
 	std::vector<u32> data;
 	std::vector<rsx_vertex_input> rsx_vertex_inputs;
 	u32 output_mask;
+	bool skip_vertex_input_check;
 };
