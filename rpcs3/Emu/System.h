@@ -328,9 +328,13 @@ struct cfg_root : cfg::node
 		cfg::_bool strict_rendering_mode{this, "Strict Rendering Mode"};
 		cfg::_bool disable_zcull_queries{this, "Disable ZCull Occlusion Queries", false};
 		cfg::_bool disable_vertex_cache{this, "Disable Vertex Cache", false};
-		cfg::_bool frame_skip_enabled{this, "Enable Frame Skip"};
+		cfg::_bool frame_skip_enabled{this, "Enable Frame Skip", false};
+		cfg::_bool force_cpu_blit_processing{this, "Force CPU Blit", false}; //Debugging option
 		cfg::_int<1, 8> consequtive_frames_to_draw{this, "Consecutive Frames To Draw", 1};
 		cfg::_int<1, 8> consequtive_frames_to_skip{this, "Consecutive Frames To Skip", 1};
+		cfg::_int<50, 800> resolution_scale_percent{this, "Resolution Scale", 100};
+		cfg::_int<0, 16> anisotropic_level_override{this, "Anisotropic Filter Override", 0};
+		cfg::_int<1, 1024> min_scalable_dimension{this, "Minimum Scalable Dimension", 128};
 
 		struct node_d3d12 : cfg::node
 		{
