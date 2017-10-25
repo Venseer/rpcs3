@@ -56,7 +56,6 @@ public:
 		D3D12Adapter,
 		VulkanAdapter,
 		ForceHighpZ,
-		AutoInvalidateCache,
 		StrictRenderingMode,
 		DisableVertexCache,
 		DisableOcclusionQueries,
@@ -83,6 +82,7 @@ public:
 		StartOnBoot,
 		StartGameFullscreen,
 		ShowFPSInTitle,
+		ShowTrophyPopups,
 		ShowWelcomeScreen,
 
 		// Network
@@ -209,7 +209,6 @@ private:
 		{ GPUTextureScaling,        { "Video", "Use GPU texture scaling"}},
 		{ StretchToDisplayArea,     { "Video", "Stretch To Display Area"}},
 		{ ForceHighpZ,              { "Video", "Force High Precision Z buffer"}},
-		{ AutoInvalidateCache,      { "Video", "Invalidate Cache Every Frame"}},
 		{ StrictRenderingMode,      { "Video", "Strict Rendering Mode"}},
 		{ DisableVertexCache,       { "Video", "Disable Vertex Cache"}},
 		{ DisableOcclusionQueries,  { "Video", "Disable ZCull Occlusion Queries" }},
@@ -238,6 +237,7 @@ private:
 		{StartOnBoot,         { "Miscellaneous", "Automatically start games after boot" }},
 		{StartGameFullscreen, { "Miscellaneous", "Start games in fullscreen mode"}},
 		{ShowFPSInTitle,      { "Miscellaneous", "Show FPS counter in window title"}},
+		{ShowTrophyPopups,    { "Miscellaneous", "Show trophy popups"}},
 		{ShowWelcomeScreen,   { "Miscellaneous", "Show Welcome Screen"}},
 
 		// Networking
