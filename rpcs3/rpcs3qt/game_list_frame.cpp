@@ -36,6 +36,8 @@ game_list_frame::game_list_frame(std::shared_ptr<gui_settings> guiSettings, std:
 	m_Text_Factor     = xgui_settings->GetValue(GUI::gl_textFactor).toReal();
 	m_showToolBar     = xgui_settings->GetValue(GUI::gl_toolBarVisible).toBool();
 	m_Icon_Color      = xgui_settings->GetValue(GUI::gl_iconColor).value<QColor>();
+	m_colSortOrder    = xgui_settings->GetValue(GUI::gl_sortAsc).toBool() ? Qt::AscendingOrder : Qt::DescendingOrder;
+	m_sortColumn      = xgui_settings->GetValue(GUI::gl_sortCol).toInt();
 
 	m_oldLayoutIsList = m_isListLayout;
 
@@ -630,6 +632,7 @@ void game_list_frame::ShowSpecifiedContextMenu(const QPoint &pos, int row)
 	QAction* removeGame = myMenu.addAction(tr("&Remove"));
 	QAction* removeConfig = myMenu.addAction(tr("&Remove Custom Configuration"));
 	QAction* deleteShadersCache = myMenu.addAction(tr("&Delete Shaders Cache"));
+	QAction* deleteLLVMCache = myMenu.addAction(tr("&Delete LLVM Cache"));
 	myMenu.addSeparator();
 	QAction* openGameFolder = myMenu.addAction(tr("&Open Install Folder"));
 	QAction* openConfig = myMenu.addAction(tr("&Open Config Folder"));
@@ -670,6 +673,31 @@ void game_list_frame::ShowSpecifiedContextMenu(const QPoint &pos, int row)
 	{
 		DeleteShadersCache(row);
 	});
+
+	connect(deleteLLVMCache, &QAction::triggered, [=]()
+	{
+		if (QMessageBox::question(this, tr("Confirm Delete"), tr("Delete LLVM cache?")) == QMessageBox::Yes)
+		{
+			const std::string config_base_dir = fs::get_config_dir() + "data/" + m_game_data[row].info.serial;
+
+			for (auto&& subdir : fs::dir{config_base_dir})
+			{
+				if (!subdir.is_directory || subdir.name == "." || subdir.name == "..")
+				{
+					continue;
+				}
+
+				for (auto&& entry : fs::dir{config_base_dir + "/" + subdir.name})
+				{
+					if (entry.name.size() >= 4 && entry.name.compare(entry.name.size() - 4, 4, ".obj", 4) == 0)
+					{
+						fs::remove_file(config_base_dir + "/" + subdir.name + "/" + entry.name);
+					}
+				}
+			}
+		}
+	});
+
 	connect(openGameFolder, &QAction::triggered, [=]()
 	{
 		open_dir(currGame.path);

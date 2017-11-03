@@ -386,6 +386,8 @@ namespace gl
 
 		bool flush()
 		{
+			if (flushed) return true; //Already written, ignore
+
 			if (!copied)
 			{
 				LOG_WARNING(RSX, "Cache miss at address 0x%X. This is gonna hurt...", cpu_address_base);
@@ -399,7 +401,6 @@ namespace gl
 				}
 			}
 
-			protect(utils::protection::rw);
 			m_fence.wait_for_signal();
 			flushed = true;
 
@@ -672,7 +673,10 @@ namespace gl
 
 			//Its not necessary to lock blit dst textures as they are just reused as necessary
 			if (context != rsx::texture_upload_context::blit_engine_dst || g_cfg.video.strict_rendering_mode)
+			{
 				cached.protect(utils::protection::ro);
+				update_cache_tag();
+			}
 
 			return &cached;
 		}

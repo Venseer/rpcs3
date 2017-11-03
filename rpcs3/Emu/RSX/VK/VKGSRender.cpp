@@ -551,7 +551,8 @@ VKGSRender::VKGSRender() : GSRender()
 
 	m_client_width = m_frame->client_width();
 	m_client_height = m_frame->client_height();
-	m_swap_chain->init_swapchain(m_client_width, m_client_height);
+	if (!m_swap_chain->init_swapchain(m_client_width, m_client_height))
+		present_surface_dirty_flag = true;
 
 	//create command buffer...
 	m_command_buffer_pool.create((*m_device));
@@ -567,6 +568,7 @@ VKGSRender::VKGSRender() : GSRender()
 	//Create secondary command_buffer for parallel operations
 	m_secondary_command_buffer_pool.create((*m_device));
 	m_secondary_command_buffer.create(m_secondary_command_buffer_pool);
+	m_secondary_command_buffer.access_hint = vk::command_buffer::access_type_hint::all;
 	
 	//Precalculated stuff
 	m_render_passes = get_precomputed_render_passes(*m_device, m_optimal_tiling_supported_formats);
@@ -739,27 +741,32 @@ VKGSRender::~VKGSRender()
 
 bool VKGSRender::on_access_violation(u32 address, bool is_writing)
 {
-	std::pair<bool, std::vector<vk::cached_texture_section*>> result;
+	vk::texture_cache::thrashed_set result;
 	{
 		std::lock_guard<std::mutex> lock(m_secondary_cb_guard);
 		result = std::move(m_texture_cache.invalidate_address(address, is_writing, false, *m_device, m_secondary_command_buffer, m_memory_type_mapping, m_swap_chain->get_present_queue()));
 	}
 
-	if (!result.first)
+	if (!result.violation_handled)
 		return false;
 
-	if (result.second.size() > 0)
+	if (result.num_flushable > 0)
 	{
 		const bool is_rsxthr = std::this_thread::get_id() == rsx_thread;
 		bool has_queue_ref = false;
 
 		u64 sync_timestamp = 0ull;
-		for (const auto& tex : result.second)
+		for (const auto& tex : result.affected_sections)
 			sync_timestamp = std::max(sync_timestamp, tex->get_sync_timestamp());
 
 		if (!is_rsxthr)
 		{
 			vm::temporary_unlock();
+		}
+		else
+		{
+			//Flush primary cb queue to sync pending changes (e.g image transitions!)
+			flush_command_queue();
 		}
 
 		if (sync_timestamp > 0)
@@ -820,7 +827,7 @@ bool VKGSRender::on_access_violation(u32 address, bool is_writing)
 			}
 		}
 
-		m_texture_cache.flush_all(result.second, *m_device, m_secondary_command_buffer, m_memory_type_mapping, m_swap_chain->get_present_queue());
+		m_texture_cache.flush_all(result, *m_device, m_secondary_command_buffer, m_memory_type_mapping, m_swap_chain->get_present_queue());
 
 		if (has_queue_ref)
 		{
@@ -834,8 +841,8 @@ bool VKGSRender::on_access_violation(u32 address, bool is_writing)
 void VKGSRender::on_notify_memory_unmapped(u32 address_base, u32 size)
 {
 	std::lock_guard<std::mutex> lock(m_secondary_cb_guard);
-	if (std::get<0>(m_texture_cache.invalidate_range(address_base, size, true, true, false,
-		*m_device, m_secondary_command_buffer, m_memory_type_mapping, m_swap_chain->get_present_queue())))
+	if (m_texture_cache.invalidate_range(address_base, size, true, true, false,
+		*m_device, m_secondary_command_buffer, m_memory_type_mapping, m_swap_chain->get_present_queue()).violation_handled)
 	{
 		m_texture_cache.purge_dirty();
 	}
@@ -988,6 +995,8 @@ void VKGSRender::end()
 		return;
 	}
 
+	std::chrono::time_point<steady_clock> state_check_start = steady_clock::now();
+
 	//Load program here since it is dependent on vertex state
 	if (!check_program_status())
 	{
@@ -996,14 +1005,17 @@ void VKGSRender::end()
 		return;
 	}
 
+	std::chrono::time_point<steady_clock> state_check_end = steady_clock::now();
+	m_setup_time += (u32)std::chrono::duration_cast<std::chrono::microseconds>(state_check_end - state_check_start).count();
+
 	//Programs data is dependent on vertex state
-	std::chrono::time_point<steady_clock> vertex_start = steady_clock::now();
+	std::chrono::time_point<steady_clock> vertex_start = state_check_end;
 	auto upload_info = upload_vertex_data();
 	std::chrono::time_point<steady_clock> vertex_end = steady_clock::now();
 	m_vertex_upload_time += std::chrono::duration_cast<std::chrono::microseconds>(vertex_end - vertex_start).count();
 
 	//Load program
-	std::chrono::time_point<steady_clock> program_start = steady_clock::now();
+	std::chrono::time_point<steady_clock> program_start = vertex_end;
 	load_program(std::get<2>(upload_info), std::get<3>(upload_info));
 	std::chrono::time_point<steady_clock> program_stop = steady_clock::now();
 	m_setup_time += std::chrono::duration_cast<std::chrono::microseconds>(program_stop - program_start).count();
@@ -1326,7 +1338,13 @@ void VKGSRender::on_init_thread()
 	GSRender::on_init_thread();
 	rsx_thread = std::this_thread::get_id();
 
+	m_frame->disable_wm_event_queue();
+	m_frame->hide();
+
 	m_shaders_cache->load(*m_device, pipeline_layout);
+
+	m_frame->enable_wm_event_queue();
+	m_frame->show();
 }
 
 void VKGSRender::on_exit()
@@ -1741,11 +1759,14 @@ void VKGSRender::do_local_task()
 				handled = true;
 				present_surface_dirty_flag = true;
 				break;
-			case wm_event::window_moved:
-				handled = true;
-				break;
 			case wm_event::geometry_change_in_progress:
 				timeout += 10; //extend timeout to wait for user to finish resizing
+				break;
+			case wm_event::window_visibility_changed:
+			case wm_event::window_minimized:
+			case wm_event::window_restored:
+			case wm_event::window_moved:
+				handled = true; //ignore these events as they do not alter client area
 				break;
 			}
 
@@ -1814,14 +1835,23 @@ bool VKGSRender::check_program_status()
 		if (!is_depth)
 			surface = m_rtts.get_texture_from_render_target_if_applicable(texaddr);
 		else
-		{
 			surface = m_rtts.get_texture_from_depth_stencil_if_applicable(texaddr);
 
-			if (!surface && m_texture_cache.is_depth_texture(texaddr, (u32)get_texture_size(tex)))
+		const bool dirty_framebuffer = (surface != nullptr && !m_texture_cache.test_framebuffer(texaddr));
+		if (dirty_framebuffer || !surface)
+		{
+			if (is_depth && m_texture_cache.is_depth_texture(texaddr, (u32)get_texture_size(tex)))
 				return std::make_tuple(true, 0);
-		}
 
-		if (!surface) return std::make_tuple(false, 0);
+			if (dirty_framebuffer)
+				return std::make_tuple(false, 0);
+
+			auto rsc = m_rtts.get_surface_subresource_if_applicable(texaddr, 0, 0, tex.pitch(), false, false, !is_depth, is_depth);
+			if (!rsc.surface || rsc.is_depth_surface != is_depth)
+				return std::make_tuple(false, 0);
+
+			surface = rsc.surface;
+		}
 
 		return std::make_tuple(true, surface->native_pitch);
 	};
@@ -2279,6 +2309,8 @@ void VKGSRender::prepare_rtts()
 				//Ignore this buffer (usually set to 64)
 				m_surface_info[index].pitch = 0;
 		}
+
+		m_texture_cache.tag_framebuffer(surface_addresses[index]);
 	}
 
 	if (std::get<0>(m_rtts.m_bound_depth_stencil) != 0)
@@ -2292,6 +2324,8 @@ void VKGSRender::prepare_rtts()
 
 		if (m_depth_surface_info.pitch <= 64 && clip_width > m_depth_surface_info.pitch)
 			m_depth_surface_info.pitch = 0;
+
+		m_texture_cache.tag_framebuffer(zeta_address);
 	}
 
 	m_draw_buffers_count = static_cast<u32>(draw_buffers.size());
@@ -2377,6 +2411,15 @@ void VKGSRender::prepare_rtts()
 
 void VKGSRender::reinitialize_swapchain()
 {
+	const auto new_width = m_frame->client_width();
+	const auto new_height = m_frame->client_height();
+
+	//Reject requests to acquire new swapchain if the window is minimized
+	//The NVIDIA driver will spam VK_ERROR_OUT_OF_DATE_KHR if you try to acquire an image from the swapchain and the window is minimized
+	//However, any attempt to actually renew the swapchain will crash the driver with VK_ERROR_DEVICE_LOST while the window is in this state
+	if (new_width == 0 || new_height == 0)
+		return;
+
 	/**
 	* Waiting for the commands to process does not work reliably as the fence can be signaled before swap images are released
 	* and there are no explicit methods to ensure that the presentation engine is not using the images at all.
@@ -2386,13 +2429,6 @@ void VKGSRender::reinitialize_swapchain()
 	close_and_submit_command_buffer({}, m_current_command_buffer->submit_fence);
 	m_current_command_buffer->pending = true;
 	m_current_command_buffer->reset();
-
-	//Will have to block until rendering is completed
-	VkFence resize_fence = VK_NULL_HANDLE;
-	VkFenceCreateInfo infos = {};
-	infos.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
-
-	vkCreateFence((*m_device), &infos, nullptr, &resize_fence);
 
 	for (auto &ctx : frame_context_storage)
 	{
@@ -2412,9 +2448,16 @@ void VKGSRender::reinitialize_swapchain()
 	m_framebuffers_to_clean.clear();
 
 	//Rebuild swapchain. Old swapchain destruction is handled by the init_swapchain call
-	m_client_width = m_frame->client_width();
-	m_client_height = m_frame->client_height();
-	m_swap_chain->init_swapchain(m_client_width, m_client_height);
+	if (!m_swap_chain->init_swapchain(new_width, new_height))
+	{
+		LOG_WARNING(RSX, "Swapchain initialization failed. Request ignored [%dx%d]", new_width, new_height);
+		present_surface_dirty_flag = false;
+		open_command_buffer();
+		return;
+	}
+
+	m_client_width = new_width;
+	m_client_height = new_height;
 
 	//Prepare new swapchain images for use
 	open_command_buffer();
@@ -2432,6 +2475,13 @@ void VKGSRender::reinitialize_swapchain()
 			VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR,
 			vk::get_image_subresource_range(0, 0, 1, 1, VK_IMAGE_ASPECT_COLOR_BIT));
 	}
+
+	//Will have to block until rendering is completed
+	VkFence resize_fence = VK_NULL_HANDLE;
+	VkFenceCreateInfo infos = {};
+	infos.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+
+	vkCreateFence((*m_device), &infos, nullptr, &resize_fence);
 
 	//Flush the command buffer
 	close_and_submit_command_buffer({}, resize_fence);
@@ -2564,7 +2614,7 @@ void VKGSRender::flip(int buffer)
 			continue;
 		}
 		case VK_ERROR_OUT_OF_DATE_KHR:
-			LOG_ERROR(RSX, "vkAcquireNextImageKHR failed with VK_ERROR_OUT_OF_DATE_KHR. Flip request ignored until surface is recreated.");
+			LOG_WARNING(RSX, "vkAcquireNextImageKHR failed with VK_ERROR_OUT_OF_DATE_KHR. Flip request ignored until surface is recreated.");
 			present_surface_dirty_flag = true;
 			reinitialize_swapchain();
 			return;
@@ -2684,4 +2734,12 @@ bool VKGSRender::scaled_image_from_memory(rsx::blit_src_info& src, rsx::blit_dst
 	m_current_command_buffer->begin();
 
 	return result;
+}
+
+void VKGSRender::notify_tile_unbound(u32 tile)
+{
+	//TODO: Handle texture writeback
+	//u32 addr = rsx::get_address(tiles[tile].offset, tiles[tile].location);
+	//on_notify_memory_unmapped(addr, tiles[tile].size);
+	//m_rtts.invalidate_surface_address(addr, false);
 }

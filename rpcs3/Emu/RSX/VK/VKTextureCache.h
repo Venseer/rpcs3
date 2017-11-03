@@ -20,6 +20,7 @@ namespace vk
 		//DMA relevant data
 		VkFence dma_fence = VK_NULL_HANDLE;
 		bool synchronized = false;
+		bool flushed = false;
 		u64 sync_timestamp = 0;
 		u64 last_use_timestamp = 0;
 		vk::render_device* m_device = nullptr;
@@ -62,6 +63,7 @@ namespace vk
 			//Even if we are managing the same vram section, we cannot guarantee contents are static
 			//The create method is only invoked when a new mangaged session is required
 			synchronized = false;
+			flushed = false;
 			sync_timestamp = 0ull;
 			last_use_timestamp = get_system_time();
 		}
@@ -179,13 +181,16 @@ namespace vk
 				CHECK_RESULT(vkWaitForFences(*m_device, 1, &dma_fence, VK_TRUE, UINT64_MAX));
 				CHECK_RESULT(vkResetCommandBuffer(cmd, 0));
 				CHECK_RESULT(vkResetFences(*m_device, 1, &dma_fence));
+
+				if (cmd.access_hint != vk::command_buffer::access_type_hint::all)
+					cmd.begin();
 			}
 
 			synchronized = true;
 			sync_timestamp = get_system_time();
 		}
 
-		template<typename T>
+		template<typename T, bool swapped>
 		void do_memory_transfer(void *pixels_dst, const void *pixels_src)
 		{
 			if (sizeof(T) == 1)
@@ -193,17 +198,30 @@ namespace vk
 			else
 			{
 				const u32 block_size = width * height;
-					
-				auto typed_dst = (be_t<T> *)pixels_dst;
-				auto typed_src = (T *)pixels_src;
 
-				for (u32 px = 0; px < block_size; ++px)
-					typed_dst[px] = typed_src[px];
+				if (swapped)
+				{
+					auto typed_dst = (be_t<T> *)pixels_dst;
+					auto typed_src = (T *)pixels_src;
+
+					for (u32 px = 0; px < block_size; ++px)
+						typed_dst[px] = typed_src[px];
+				}
+				else
+				{
+					auto typed_dst = (T *)pixels_dst;
+					auto typed_src = (T *)pixels_src;
+
+					for (u32 px = 0; px < block_size; ++px)
+						typed_dst[px] = typed_src[px];
+				}
 			}
 		}
 
 		bool flush(vk::render_device& dev, vk::command_buffer& cmd, vk::memory_type_mapping& memory_types, VkQueue submit_queue)
 		{
+			if (flushed) return true;
+
 			if (m_device == nullptr)
 				m_device = &dev;
 
@@ -217,31 +235,50 @@ namespace vk
 				result = false;
 			}
 
-			protect(utils::protection::rw);
+			flushed = true;
 
 			void* pixels_src = dma_buffer->map(0, cpu_address_range);
 			void* pixels_dst = vm::base(cpu_address_base);
 
 			const u8 bpp = real_pitch / width;
 
+			//We have to do our own byte swapping since the driver doesnt do it for us
+			bool swap_bytes = false;
+			switch (vram_texture->info.format)
+			{
+			case VK_FORMAT_R16G16B16A16_SFLOAT:
+			case VK_FORMAT_R32G32B32A32_SFLOAT:
+			case VK_FORMAT_R32_SFLOAT:
+				swap_bytes = true;
+				break;
+			}
+
 			if (real_pitch == rsx_pitch)
 			{
-				//We have to do our own byte swapping since the driver doesnt do it for us
 				switch (bpp)
 				{
 				default:
 					LOG_ERROR(RSX, "Invalid bpp %d", bpp);
 				case 1:
-					do_memory_transfer<u8>(pixels_dst, pixels_src);
+					do_memory_transfer<u8, false>(pixels_dst, pixels_src);
 					break;
 				case 2:
-					do_memory_transfer<u16>(pixels_dst, pixels_src);
+					if (swap_bytes)
+						do_memory_transfer<u16, true>(pixels_dst, pixels_src);
+					else
+						do_memory_transfer<u16, false>(pixels_dst, pixels_src);
 					break;
 				case 4:
-					do_memory_transfer<u32>(pixels_dst, pixels_src);
+					if (swap_bytes)
+						do_memory_transfer<u32, true>(pixels_dst, pixels_src);
+					else
+						do_memory_transfer<u32, false>(pixels_dst, pixels_src);
 					break;
 				case 8:
-					do_memory_transfer<u64>(pixels_dst, pixels_src);
+					if (swap_bytes)
+						do_memory_transfer<u64, true>(pixels_dst, pixels_src);
+					else
+						do_memory_transfer<u64, false>(pixels_dst, pixels_src);
 					break;
 				}
 			}
@@ -251,7 +288,7 @@ namespace vk
 				//usually we can just get away with nearest filtering
 				const u8 samples = rsx_pitch / real_pitch;
 
-				rsx::scale_image_nearest(pixels_dst, pixels_src, width, height, rsx_pitch, real_pitch, bpp, samples, true);
+				rsx::scale_image_nearest(pixels_dst, pixels_src, width, height, rsx_pitch, real_pitch, bpp, samples, swap_bytes);
 			}
 
 			dma_buffer->unmap();
@@ -540,7 +577,10 @@ namespace vk
 
 			//Its not necessary to lock blit dst textures as they are just reused as necessary
 			if (context != rsx::texture_upload_context::blit_engine_dst || g_cfg.video.strict_rendering_mode)
+			{
 				region.protect(utils::protection::ro);
+				update_cache_tag();
+			}
 
 			read_only_range = region.get_min_max(read_only_range);
 			return &region;

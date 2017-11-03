@@ -166,6 +166,7 @@ struct EmuCallbacks
 	std::function<std::shared_ptr<class MsgDialogBase>()> get_msg_dialog;
 	std::function<std::unique_ptr<class SaveDialogBase>()> get_save_dialog;
 	std::function<std::unique_ptr<class TrophyNotificationBase>()> get_trophy_notification_dialog;
+	std::function<void(const std::string&)> register_trophy_commid_to_ui;
 };
 
 class Emulator final
@@ -214,6 +215,8 @@ public:
 	std::vector<std::string> argv;
 	std::vector<std::string> envp;
 	std::vector<u8> data;
+	std::vector<u8> klic;
+	std::string disc;
 
 	const std::string& GetBoot() const
 	{
@@ -363,6 +366,7 @@ struct cfg_root : cfg::node
 		cfg::_bool dump_to_file{this, "Dump to file"};
 		cfg::_bool convert_to_u16{this, "Convert to 16 bit"};
 		cfg::_bool downmix_to_2ch{this, "Downmix to Stereo", true};
+		cfg::_int<2, 128> frames{this, "Buffer Count", 32};
 
 	} audio{this};
 	
