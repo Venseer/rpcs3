@@ -76,15 +76,13 @@ void main_window::Init()
 
 	setAcceptDrops(true);
 
-	m_appIcon = QIcon(":/rpcs3.ico");
-
 	// hide utilities from the average user
-	ui->menuUtilities->menuAction()->setVisible(guiSettings->GetValue(GUI::m_showDebugTab).toBool());
+	ui->menuUtilities->menuAction()->setVisible(guiSettings->GetValue(gui::m_showDebugTab).toBool());
 
 	// add toolbar widgets (crappy Qt designer is not able to)
 	ui->toolBar->setObjectName("mw_toolbar");
-	ui->sizeSlider->setRange(0, GUI::gl_max_slider_pos);
-	ui->sizeSlider->setSliderPosition(guiSettings->GetValue(GUI::gl_iconSize).toInt());
+	ui->sizeSlider->setRange(0, gui::gl_max_slider_pos);
+	ui->sizeSlider->setSliderPosition(guiSettings->GetValue(gui::gl_iconSize).toInt());
 	ui->toolBar->addWidget(ui->sizeSliderContainer);
 	ui->toolBar->addSeparator();
 	ui->toolBar->addWidget(ui->mw_searchbar);
@@ -107,7 +105,6 @@ void main_window::Init()
 
 	setMinimumSize(350, minimumSizeHint().height());    // seems fine on win 10
 	setWindowTitle(QString::fromStdString("RPCS3 v" + rpcs3::version.to_string()));
-	!m_appIcon.isNull() ? setWindowIcon(m_appIcon) : LOG_WARNING(GENERAL, "AppImage could not be loaded!");
 
 	Q_EMIT RequestGlobalStylesheetChange(guiSettings->GetCurrentStylesheetPath());
 	ConfigureGuiFromSettings(true);
@@ -130,13 +127,12 @@ void main_window::Init()
 		LOG_WARNING(GENERAL, "Experimental Build Warning! Build origin: " STRINGIZE(BRANCH));
 
 		QMessageBox msg;
-		msg.setWindowTitle("Experimental Build Warning");
-		msg.setWindowIcon(m_appIcon);
+		msg.setWindowTitle(tr("Experimental Build Warning"));
 		msg.setIcon(QMessageBox::Critical);
 		msg.setTextFormat(Qt::RichText);
 		msg.setStandardButtons(QMessageBox::Yes | QMessageBox::No);
 		msg.setDefaultButton(QMessageBox::No);
-		msg.setText(QString(
+		msg.setText(QString(tr(
 			R"(
 				<p style="white-space: nowrap;">
 					Please understand that this build is not an official RPCS3 release.<br>
@@ -146,7 +142,7 @@ void main_window::Init()
 					Do you wish to use this build anyway?
 				</p>
 			)"
-		).arg(STRINGIZE(BRANCH)));
+		)).arg(Qt::convertFromPlainText(STRINGIZE(BRANCH))));
 		msg.layout()->setSizeConstraint(QLayout::SetFixedSize);
 
 		if (msg.exec() == QMessageBox::No)
@@ -196,7 +192,7 @@ QIcon main_window::GetAppIcon()
 }
 
 // loads the appIcon from path and embeds it centered into an empty square icon
-void main_window::SetAppIconFromPath(const std::string path)
+void main_window::SetAppIconFromPath(const std::string& path)
 {
 	// get Icon for the gs_frame from path. this handles presumably all possible use cases
 	QString qpath = qstr(path);
@@ -214,7 +210,7 @@ void main_window::SetAppIconFromPath(const std::string path)
 				// load the image from path. It will most likely be a rectangle
 				QImage source = QImage(qstr(ico));
 				int edgeMax = std::max(source.width(), source.height());
-				
+
 				// create a new transparent image with square size and same format as source (maybe handle other formats than RGB32 as well?)
 				QImage::Format format = source.format() == QImage::Format_RGB32 ? QImage::Format_ARGB32 : source.format();
 				QImage dest = QImage(edgeMax, edgeMax, format);
@@ -236,7 +232,7 @@ void main_window::SetAppIconFromPath(const std::string path)
 		}
 	}
 	// if nothing was found reset the icon to default
-	m_appIcon = QIcon(":/rpcs3.ico");
+	m_appIcon = QApplication::windowIcon();
 }
 
 void main_window::BootElf()
@@ -249,7 +245,7 @@ void main_window::BootElf()
 		stopped = true;
 	}
 
-	QString path_last_ELF = guiSettings->GetValue(GUI::fd_boot_elf).toString();
+	QString path_last_ELF = guiSettings->GetValue(gui::fd_boot_elf).toString();
 	QString filePath = QFileDialog::getOpenFileName(this, tr("Select (S)ELF To Boot"), path_last_ELF, tr(
 		"(S)ELF files (*BOOT.BIN *.elf *.self);;"
 		"ELF files (BOOT.BIN *.elf);;"
@@ -270,7 +266,7 @@ void main_window::BootElf()
 	// If we resolved the filepath earlier we would end up setting the last opened dir to the unwanted
 	// game folder in case of having e.g. a Game Folder with collected links to elf files.
 	// Don't set last path earlier in case of cancelled dialog
-	guiSettings->SetValue(GUI::fd_boot_elf, filePath);
+	guiSettings->SetValue(gui::fd_boot_elf, filePath);
 	const std::string path = sstr(QFileInfo(filePath).canonicalFilePath());
 
 	SetAppIconFromPath(path);
@@ -285,7 +281,7 @@ void main_window::BootElf()
 		LOG_SUCCESS(LOADER, "(S)ELF: boot done.");
 
 		const std::string serial = Emu.GetTitleID().empty() ? "" : "[" + Emu.GetTitleID() + "] ";
-		AddRecentAction(GUI::Recent_Game(qstr(Emu.GetBoot()), qstr(serial + Emu.GetTitle())));
+		AddRecentAction(gui::Recent_Game(qstr(Emu.GetBoot()), qstr(serial + Emu.GetTitle())));
 		m_gameListFrame->Refresh(true);
 	}
 }
@@ -300,7 +296,7 @@ void main_window::BootGame()
 		stopped = true;
 	}
 
-	QString path_last_Game = guiSettings->GetValue(GUI::fd_boot_game).toString();
+	QString path_last_Game = guiSettings->GetValue(gui::fd_boot_game).toString();
 	QString dirPath = QFileDialog::getExistingDirectory(this, tr("Select Game Folder"), path_last_Game, QFileDialog::ShowDirsOnly);
 
 	if (dirPath == NULL)
@@ -309,7 +305,7 @@ void main_window::BootGame()
 		return;
 	}
 	Emu.Stop();
-	guiSettings->SetValue(GUI::fd_boot_game, QFileInfo(dirPath).path());
+	guiSettings->SetValue(gui::fd_boot_game, QFileInfo(dirPath).path());
 	const std::string path = sstr(dirPath);
 	SetAppIconFromPath(path);
 
@@ -322,7 +318,7 @@ void main_window::BootGame()
 		LOG_SUCCESS(LOADER, "Boot Game: boot done.");
 
 		const std::string serial = Emu.GetTitleID().empty() ? "" : "[" + Emu.GetTitleID() + "] ";
-		AddRecentAction(GUI::Recent_Game(qstr(Emu.GetBoot()), qstr(serial + Emu.GetTitle())));
+		AddRecentAction(gui::Recent_Game(qstr(Emu.GetBoot()), qstr(serial + Emu.GetTitle())));
 		m_gameListFrame->Refresh(true);
 	}
 }
@@ -333,7 +329,7 @@ void main_window::InstallPkg(const QString& dropPath)
 
 	if (filePath.isEmpty())
 	{
-		QString path_last_PKG = guiSettings->GetValue(GUI::fd_install_pkg).toString();
+		QString path_last_PKG = guiSettings->GetValue(gui::fd_install_pkg).toString();
 		filePath = QFileDialog::getOpenFileName(this, tr("Select PKG To Install"), path_last_PKG, tr("PKG files (*.pkg);;All files (*.*)"));
 	}
 	else
@@ -346,61 +342,16 @@ void main_window::InstallPkg(const QString& dropPath)
 		}
 	}
 
-	if (filePath == NULL)
+	if (filePath.isEmpty())
 	{
 		return;
 	}
+
 	Emu.Stop();
 
-	guiSettings->SetValue(GUI::fd_install_pkg, QFileInfo(filePath).path());
+	guiSettings->SetValue(gui::fd_install_pkg, QFileInfo(filePath).path());
 	const std::string fileName = sstr(QFileInfo(filePath).fileName());
 	const std::string path = sstr(filePath);
-
-	// Open PKG file
-	fs::file pkg_f(path);
-
-	if (!pkg_f || pkg_f.size() < 64)
-	{
-		LOG_ERROR(LOADER, "PKG: Failed to open %s", path);
-		return;
-	}
-
-	//Check header
-	u32 pkg_signature;
-	pkg_f.seek(0);
-	pkg_f.read(pkg_signature);
-	if (pkg_signature != "\x7FPKG"_u32)
-	{
-		LOG_ERROR(LOADER, "PKG: %s is not a pkg file", fileName);
-		return;
-	}
-
-	// Get title ID
-	std::vector<char> title_id(9);
-	pkg_f.seek(55);
-	pkg_f.read(title_id);
-	pkg_f.seek(0);
-
-	// Get full path
-	const auto& local_path = Emu.GetHddDir() + "game/" + std::string(std::begin(title_id), std::end(title_id));
-
-	if (!fs::create_dir(local_path))
-	{
-		if (fs::is_dir(local_path))
-		{
-			if (QMessageBox::question(this, tr("PKG Decrypter / Installer"), tr("Another installation found. Do you want to overwrite it?"),	
-				QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes)
-			{
-				LOG_ERROR(LOADER, "PKG: Cancelled installation to existing directory %s", local_path);
-				return;
-			}
-		}
-		else
-		{
-			LOG_ERROR(LOADER, "PKG: Could not create the installation directory %s", local_path);
-			return;
-		}
-	}
 
 	QProgressDialog pdlg(tr("Installing package ... please wait ..."), tr("Cancel"), 0, 1000, this);
 	pdlg.setWindowTitle(tr("RPCS3 Package Installer"));
@@ -409,12 +360,11 @@ void main_window::InstallPkg(const QString& dropPath)
 	pdlg.show();
 
 #ifdef _WIN32
-	QWinTaskbarButton *taskbar_button = new QWinTaskbarButton();
+	std::unique_ptr<QWinTaskbarButton> taskbar_button = std::make_unique<QWinTaskbarButton>();
 	taskbar_button->setWindow(windowHandle());
-	QWinTaskbarProgress *taskbar_progress = taskbar_button->progress();
+	QWinTaskbarProgress* taskbar_progress = taskbar_button->progress();
 	taskbar_progress->setRange(0, 1000);
 	taskbar_progress->setVisible(true);
-
 #endif
 
 	// Synchronization variable
@@ -423,39 +373,29 @@ void main_window::InstallPkg(const QString& dropPath)
 		// Run PKG unpacking asynchronously
 		scope_thread worker("PKG Installer", [&]
 		{
-			if (pkg_install(pkg_f, local_path + '/', progress, path))
+			if (pkg_install(path, progress))
 			{
 				progress = 1.;
 				return;
 			}
 
-			// TODO: Ask user to delete files on cancellation/failure?
 			progress = -1.;
 		});
+
 		// Wait for the completion
 		while (std::this_thread::sleep_for(5ms), std::abs(progress) < 1.)
 		{
 			if (pdlg.wasCanceled())
 			{
 				progress -= 1.;
-#ifdef _WIN32
-				taskbar_progress->hide();
-				taskbar_button->~QWinTaskbarButton();
-#endif
-				if (QMessageBox::question(this, tr("PKG Decrypter / Installer"), tr("Remove incomplete folder?"),
-					QMessageBox::Yes | QMessageBox::No, QMessageBox::No) == QMessageBox::Yes)
-				{
-					fs::remove_all(local_path);
-					m_gameListFrame->Refresh(true);
-					LOG_SUCCESS(LOADER, "PKG: removed incomplete installation in %s", local_path);
-					return;
-				}
-				break;
 			}
+
 			// Update progress window
-			pdlg.setValue(static_cast<int>(progress * pdlg.maximum()));
+			double pval = progress;
+			pval < 0 ? pval += 1. : pval;
+			pdlg.setValue(static_cast<int>(pval * pdlg.maximum()));
 #ifdef _WIN32
-			taskbar_progress->setValue(static_cast<int>(progress * taskbar_progress->maximum()));
+			taskbar_progress->setValue(static_cast<int>(pval * taskbar_progress->maximum()));
 #endif
 			QCoreApplication::processEvents();
 		}
@@ -474,13 +414,12 @@ void main_window::InstallPkg(const QString& dropPath)
 	{
 		m_gameListFrame->Refresh(true);
 		LOG_SUCCESS(GENERAL, "Successfully installed %s.", fileName);
-		guiSettings->ShowInfoBox(GUI::ib_pkg_success, tr("Success!"), tr("Successfully installed software from package!"), this);
+		guiSettings->ShowInfoBox(gui::ib_pkg_success, tr("Success!"), tr("Successfully installed software from package!"), this);
+	}
 
 #ifdef _WIN32
-		taskbar_progress->hide();
-		taskbar_button->~QWinTaskbarButton();
+	taskbar_progress->hide();
 #endif
-	}
 }
 
 void main_window::InstallPup(const QString& dropPath)
@@ -489,7 +428,7 @@ void main_window::InstallPup(const QString& dropPath)
 
 	if (filePath.isEmpty())
 	{
-		QString path_last_PUP = guiSettings->GetValue(GUI::fd_install_pup).toString();
+		QString path_last_PUP = guiSettings->GetValue(gui::fd_install_pup).toString();
 		filePath = QFileDialog::getOpenFileName(this, tr("Select PS3UPDAT.PUP To Install"), path_last_PUP, tr("PS3 update file (PS3UPDAT.PUP)"));
 	}
 	else
@@ -509,7 +448,7 @@ void main_window::InstallPup(const QString& dropPath)
 
 	Emu.Stop();
 
-	guiSettings->SetValue(GUI::fd_install_pup, QFileInfo(filePath).path());
+	guiSettings->SetValue(gui::fd_install_pup, QFileInfo(filePath).path());
 	const std::string path = sstr(filePath);
 
 	fs::file pup_f(path);
@@ -629,7 +568,7 @@ void main_window::InstallPup(const QString& dropPath)
 	if (progress > 0)
 	{
 		LOG_SUCCESS(GENERAL, "Successfully installed PS3 firmware version %s.", version_string);
-		guiSettings->ShowInfoBox(GUI::ib_pup_success, tr("Success!"), tr("Successfully installed PS3 firmware and LLE Modules!"), this);
+		guiSettings->ShowInfoBox(gui::ib_pup_success, tr("Success!"), tr("Successfully installed PS3 firmware and LLE Modules!"), this);
 
 #ifdef _WIN32
 		taskbar_progress->hide();
@@ -643,7 +582,7 @@ extern void sysutil_send_system_cmd(u64 status, u64 param);
 
 void main_window::DecryptSPRXLibraries()
 {
-	QString path_last_SPRX = guiSettings->GetValue(GUI::fd_decrypt_sprx).toString();
+	QString path_last_SPRX = guiSettings->GetValue(gui::fd_decrypt_sprx).toString();
 	QStringList modules = QFileDialog::getOpenFileNames(this, tr("Select SPRX files"), path_last_SPRX, tr("SPRX files (*.sprx)"));
 
 	if (modules.isEmpty())
@@ -653,7 +592,7 @@ void main_window::DecryptSPRXLibraries()
 
 	Emu.Stop();
 
-	guiSettings->SetValue(GUI::fd_decrypt_sprx, QFileInfo(modules.first()).path());
+	guiSettings->SetValue(gui::fd_decrypt_sprx, QFileInfo(modules.first()).path());
 
 	LOG_NOTICE(GENERAL, "Decrypting SPRX libraries...");
 
@@ -701,9 +640,9 @@ void main_window::DecryptSPRXLibraries()
 void main_window::SaveWindowState()
 {
 	// Save gui settings
-	guiSettings->SetValue(GUI::mw_geometry, saveGeometry());
-	guiSettings->SetValue(GUI::mw_windowState, saveState());
-	guiSettings->SetValue(GUI::mw_mwState, m_mw->saveState());
+	guiSettings->SetValue(gui::mw_geometry, saveGeometry());
+	guiSettings->SetValue(gui::mw_windowState, saveState());
+	guiSettings->SetValue(gui::mw_mwState, m_mw->saveState());
 
 	// Save column settings
 	m_gameListFrame->SaveSettings();
@@ -713,11 +652,11 @@ void main_window::SaveWindowState()
 
 void main_window::RepaintThumbnailIcons()
 {
-	QColor newColor = GUI::get_Label_Color("thumbnail_icon_color");
+	QColor newColor = gui::get_Label_Color("thumbnail_icon_color");
 	
 	auto icon = [&newColor](const QString& path)
 	{
-		return gui_settings::colorizedIcon(QPixmap::fromImage(gui_settings::GetOpaqueImageArea(path)), GUI::mw_tool_icon_color, newColor);
+		return gui_settings::colorizedIcon(QPixmap::fromImage(gui_settings::GetOpaqueImageArea(path)), gui::mw_tool_icon_color, newColor);
 	};
 
 #ifdef _WIN32
@@ -738,18 +677,18 @@ void main_window::RepaintToolBarIcons()
 {
 	QColor newColor;
 
-	if (guiSettings->GetValue(GUI::m_enableUIColors).toBool())
+	if (guiSettings->GetValue(gui::m_enableUIColors).toBool())
 	{
-		newColor = guiSettings->GetValue(GUI::mw_toolIconColor).value<QColor>();
+		newColor = guiSettings->GetValue(gui::mw_toolIconColor).value<QColor>();
 	}
 	else
 	{
-		newColor = GUI::get_Label_Color("toolbar_icon_color");
+		newColor = gui::get_Label_Color("toolbar_icon_color");
 	}
 
 	auto icon = [&newColor](const QString& path)
 	{
-		return gui_settings::colorizedIcon(QIcon(path), GUI::mw_tool_icon_color, newColor);
+		return gui_settings::colorizedIcon(QIcon(path), gui::mw_tool_icon_color, newColor);
 	};
 
 	m_icon_play           = icon(":/Icons/play.png");
@@ -942,7 +881,7 @@ void main_window::BootRecentAction(const QAction* act)
 			m_rg_entries.removeAt(idx);
 			m_recentGameActs.removeAt(idx);
 
-			guiSettings->SetValue(GUI::rg_entries, guiSettings->List2Var(m_rg_entries));
+			guiSettings->SetValue(gui::rg_entries, guiSettings->List2Var(m_rg_entries));
 
 			LOG_ERROR(GENERAL, "Recent Game not valid, removed from Boot Recent list: %s", sstr(pth));
 
@@ -975,7 +914,7 @@ void main_window::BootRecentAction(const QAction* act)
 	else
 	{
 		LOG_SUCCESS(LOADER, "Boot from Recent List: done");
-		AddRecentAction(GUI::Recent_Game(qstr(Emu.GetBoot()), nam));
+		AddRecentAction(gui::Recent_Game(qstr(Emu.GetBoot()), nam));
 		m_gameListFrame->Refresh(true);
 	}
 };
@@ -992,7 +931,7 @@ QAction* main_window::CreateRecentAction(const q_string_pair& entry, const uint&
 			int idx = m_rg_entries.indexOf(entry);
 			m_rg_entries.removeAt(idx);
 
-			guiSettings->SetValue(GUI::rg_entries, guiSettings->List2Var(m_rg_entries));
+			guiSettings->SetValue(gui::rg_entries, guiSettings->List2Var(m_rg_entries));
 		}
 		return nullptr;
 	}
@@ -1077,7 +1016,7 @@ void main_window::AddRecentAction(const q_string_pair& entry)
 		ui->bootRecentMenu->addAction(m_recentGameActs[i]);
 	}
 
-	guiSettings->SetValue(GUI::rg_entries, guiSettings->List2Var(m_rg_entries));
+	guiSettings->SetValue(gui::rg_entries, guiSettings->List2Var(m_rg_entries));
 }
 
 void main_window::RepaintGui()
@@ -1105,11 +1044,11 @@ void main_window::RepaintGui()
 
 void main_window::RepaintToolbar()
 {
-	if (guiSettings->GetValue(GUI::m_enableUIColors).toBool())
+	if (guiSettings->GetValue(gui::m_enableUIColors).toBool())
 	{
-		QColor tbc = guiSettings->GetValue(GUI::mw_toolBarColor).value<QColor>();
+		QColor tbc = guiSettings->GetValue(gui::mw_toolBarColor).value<QColor>();
 
-		ui->toolBar->setStyleSheet(GUI::stylesheet + QString(
+		ui->toolBar->setStyleSheet(gui::stylesheet + QString(
 			"QToolBar { background-color: rgba(%1, %2, %3, %4); }"
 			"QToolBar::separator {background-color: rgba(%5, %6, %7, %8); width: 1px; margin-top: 2px; margin-bottom: 2px;}"
 			"QSlider { background-color: rgba(%1, %2, %3, %4); }"
@@ -1120,7 +1059,7 @@ void main_window::RepaintToolbar()
 	}
 	else
 	{
-		ui->toolBar->setStyleSheet(GUI::stylesheet);
+		ui->toolBar->setStyleSheet(gui::stylesheet);
 	}
 }
 
@@ -1179,12 +1118,12 @@ void main_window::CreateConnects()
 			ui->bootRecentMenu->removeAction(act);
 		}
 		m_recentGameActs.clear();
-		guiSettings->SetValue(GUI::rg_entries, guiSettings->List2Var(q_pair_list()));
+		guiSettings->SetValue(gui::rg_entries, guiSettings->List2Var(q_pair_list()));
 	});
 
 	connect(ui->freezeRecentAct, &QAction::triggered, [=](bool checked)
 	{
-		guiSettings->SetValue(GUI::rg_freeze, checked);
+		guiSettings->SetValue(gui::rg_freeze, checked);
 	});
 
 	connect(ui->bootInstallPkgAct, &QAction::triggered, [this] {InstallPkg(); });
@@ -1243,13 +1182,13 @@ void main_window::CreateConnects()
 
 	connect(ui->confSavedataManagerAct, &QAction::triggered, [=]
 	{
-		save_manager_dialog* sdid = new save_manager_dialog();
+		save_manager_dialog* sdid = new save_manager_dialog(guiSettings);
 		sdid->show();
 	});
 
 	connect(ui->actionManage_Trophy_Data, &QAction::triggered, [=]
 	{
-		trophy_manager_dialog* trop_manager = new trophy_manager_dialog();
+		trophy_manager_dialog* trop_manager = new trophy_manager_dialog(guiSettings);
 		trop_manager->show();
 	});
 
@@ -1288,25 +1227,25 @@ void main_window::CreateConnects()
 	connect(ui->showDebuggerAct, &QAction::triggered, [=](bool checked)
 	{
 		checked ? m_debuggerFrame->show() : m_debuggerFrame->hide();
-		guiSettings->SetValue(GUI::mw_debugger, checked);
+		guiSettings->SetValue(gui::mw_debugger, checked);
 	});
 
 	connect(ui->showLogAct, &QAction::triggered, [=](bool checked)
 	{
 		checked ? m_logFrame->show() : m_logFrame->hide();
-		guiSettings->SetValue(GUI::mw_logger, checked);
+		guiSettings->SetValue(gui::mw_logger, checked);
 	});
 
 	connect(ui->showGameListAct, &QAction::triggered, [=](bool checked)
 	{
 		checked ? m_gameListFrame->show() : m_gameListFrame->hide();
-		guiSettings->SetValue(GUI::mw_gamelist, checked);
+		guiSettings->SetValue(gui::mw_gamelist, checked);
 	});
 
 	connect(ui->showToolBarAct, &QAction::triggered, [=](bool checked)
 	{
 		ui->toolBar->setVisible(checked);
-		guiSettings->SetValue(GUI::mw_toolBarVisible, checked);
+		guiSettings->SetValue(gui::mw_toolBarVisible, checked);
 	});
 
 	connect(ui->showGameToolBarAct, &QAction::triggered, [=](bool checked)
@@ -1359,7 +1298,7 @@ void main_window::CreateConnects()
 			if (m_save_slider_pos)
 			{
 				m_save_slider_pos = false;
-				guiSettings->SetValue(GUI::gl_iconSize, index);
+				guiSettings->SetValue(gui::gl_iconSize, index);
 			}
 			m_gameListFrame->ResizeIcons(index);
 		}
@@ -1370,18 +1309,18 @@ void main_window::CreateConnects()
 		int index;
 
 		if (act == ui->setIconSizeTinyAct) index = 0;
-		else if (act == ui->setIconSizeSmallAct) index = GUI::get_Index(GUI::gl_icon_size_small);
-		else if (act == ui->setIconSizeMediumAct) index = GUI::get_Index(GUI::gl_icon_size_medium);
-		else index = GUI::gl_max_slider_pos;
+		else if (act == ui->setIconSizeSmallAct) index = gui::get_Index(gui::gl_icon_size_small);
+		else if (act == ui->setIconSizeMediumAct) index = gui::get_Index(gui::gl_icon_size_medium);
+		else index = gui::gl_max_slider_pos;
 
 		resizeIcons(index);
 	});
 
 	connect (m_gameListFrame, &game_list_frame::RequestIconSizeActSet, [=](const int& idx)
 	{
-		if (idx < GUI::get_Index((GUI::gl_icon_size_small + GUI::gl_icon_size_min) / 2)) ui->setIconSizeTinyAct->setChecked(true);
-		else if (idx < GUI::get_Index((GUI::gl_icon_size_medium + GUI::gl_icon_size_small) / 2)) ui->setIconSizeSmallAct->setChecked(true);
-		else if (idx < GUI::get_Index((GUI::gl_icon_size_max + GUI::gl_icon_size_medium) / 2)) ui->setIconSizeMediumAct->setChecked(true);
+		if (idx < gui::get_Index((gui::gl_icon_size_small + gui::gl_icon_size_min) / 2)) ui->setIconSizeTinyAct->setChecked(true);
+		else if (idx < gui::get_Index((gui::gl_icon_size_medium + gui::gl_icon_size_small) / 2)) ui->setIconSizeSmallAct->setChecked(true);
+		else if (idx < gui::get_Index((gui::gl_icon_size_max + gui::gl_icon_size_medium) / 2)) ui->setIconSizeMediumAct->setChecked(true);
 		else ui->setIconSizeLargeAct->setChecked(true);
 
 		resizeIcons(idx);
@@ -1434,7 +1373,7 @@ void main_window::CreateConnects()
 	connect(ui->toolbar_list, &QAction::triggered, [=]() { ui->setlistModeListAct->trigger(); });
 	connect(ui->toolbar_grid, &QAction::triggered, [=]() { ui->setlistModeGridAct->trigger(); });
 	connect(ui->sizeSlider, &QSlider::valueChanged, resizeIcons);
-	connect(ui->sizeSlider, &QSlider::sliderReleased, this, [&] { guiSettings->SetValue(GUI::gl_iconSize, ui->sizeSlider->value()); });
+	connect(ui->sizeSlider, &QSlider::sliderReleased, this, [&] { guiSettings->SetValue(gui::gl_iconSize, ui->sizeSlider->value()); });
 
 	connect(ui->sizeSlider, &QSlider::actionTriggered, [&](int action)
 	{
@@ -1451,6 +1390,7 @@ void main_window::CreateDockWindows()
 {
 	// new mainwindow widget because existing seems to be bugged for now
 	m_mw = new QMainWindow();
+	m_mw->setContextMenuPolicy(Qt::PreventContextMenu);
 
 	m_gameListFrame = new game_list_frame(guiSettings, emuSettings, m_mw);
 	m_gameListFrame->setObjectName("gamelist");
@@ -1470,7 +1410,7 @@ void main_window::CreateDockWindows()
 		if (ui->showLogAct->isChecked())
 		{
 			ui->showLogAct->setChecked(false);
-			guiSettings->SetValue(GUI::mw_logger, false);
+			guiSettings->SetValue(gui::mw_logger, false);
 		}
 	});
 
@@ -1479,7 +1419,7 @@ void main_window::CreateDockWindows()
 		if (ui->showDebuggerAct->isChecked())
 		{
 			ui->showDebuggerAct->setChecked(false);
-			guiSettings->SetValue(GUI::mw_debugger, false);
+			guiSettings->SetValue(gui::mw_debugger, false);
 		}
 	});
 
@@ -1488,7 +1428,7 @@ void main_window::CreateDockWindows()
 		if (ui->showGameListAct->isChecked())
 		{
 			ui->showGameListAct->setChecked(false);
-			guiSettings->SetValue(GUI::mw_gamelist, false);
+			guiSettings->SetValue(gui::mw_gamelist, false);
 		}
 	});
 
@@ -1499,7 +1439,7 @@ void main_window::CreateDockWindows()
 void main_window::ConfigureGuiFromSettings(bool configure_all)
 {
 	// Restore GUI state if needed. We need to if they exist.
-	QByteArray geometry = guiSettings->GetValue(GUI::mw_geometry).toByteArray();
+	QByteArray geometry = guiSettings->GetValue(gui::mw_geometry).toByteArray();
 	if (geometry.isEmpty() == false)
 	{
 		restoreGeometry(geometry);
@@ -1512,11 +1452,11 @@ void main_window::ConfigureGuiFromSettings(bool configure_all)
 		resize(defaultSize);
 	}
 
-	restoreState(guiSettings->GetValue(GUI::mw_windowState).toByteArray());
-	m_mw->restoreState(guiSettings->GetValue(GUI::mw_mwState).toByteArray());
+	restoreState(guiSettings->GetValue(gui::mw_windowState).toByteArray());
+	m_mw->restoreState(guiSettings->GetValue(gui::mw_mwState).toByteArray());
 
-	ui->freezeRecentAct->setChecked(guiSettings->GetValue(GUI::rg_freeze).toBool());
-	m_rg_entries = guiSettings->Var2List(guiSettings->GetValue(GUI::rg_entries));
+	ui->freezeRecentAct->setChecked(guiSettings->GetValue(gui::rg_freeze).toBool());
+	m_rg_entries = guiSettings->Var2List(guiSettings->GetValue(gui::rg_entries));
 
 	// clear recent games menu of actions
 	for (auto act : m_recentGameActs)
@@ -1528,7 +1468,7 @@ void main_window::ConfigureGuiFromSettings(bool configure_all)
 	for (int i = 0; i < m_rg_entries.count(); i++)
 	{
 		// adjust old unformatted entries (avoid duplication)
-		m_rg_entries[i] = GUI::Recent_Game(m_rg_entries[i].first, m_rg_entries[i].second);
+		m_rg_entries[i] = gui::Recent_Game(m_rg_entries[i].first, m_rg_entries[i].second);
 
 		// create new action
 		QAction* act = CreateRecentAction(m_rg_entries[i], i + 1);
@@ -1545,11 +1485,11 @@ void main_window::ConfigureGuiFromSettings(bool configure_all)
 		}
 	}
 
-	ui->showLogAct->setChecked(guiSettings->GetValue(GUI::mw_logger).toBool());
-	ui->showGameListAct->setChecked(guiSettings->GetValue(GUI::mw_gamelist).toBool());
-	ui->showDebuggerAct->setChecked(guiSettings->GetValue(GUI::mw_debugger).toBool());
-	ui->showToolBarAct->setChecked(guiSettings->GetValue(GUI::mw_toolBarVisible).toBool());
-	ui->showGameToolBarAct->setChecked(guiSettings->GetValue(GUI::gl_toolBarVisible).toBool());
+	ui->showLogAct->setChecked(guiSettings->GetValue(gui::mw_logger).toBool());
+	ui->showGameListAct->setChecked(guiSettings->GetValue(gui::mw_gamelist).toBool());
+	ui->showDebuggerAct->setChecked(guiSettings->GetValue(gui::mw_debugger).toBool());
+	ui->showToolBarAct->setChecked(guiSettings->GetValue(gui::mw_toolBarVisible).toBool());
+	ui->showGameToolBarAct->setChecked(guiSettings->GetValue(gui::gl_toolBarVisible).toBool());
 
 	m_debuggerFrame->setVisible(ui->showDebuggerAct->isChecked());
 	m_logFrame->setVisible(ui->showLogAct->isChecked());
@@ -1567,14 +1507,14 @@ void main_window::ConfigureGuiFromSettings(bool configure_all)
 	ui->showCatUnknownAct->setChecked(guiSettings->GetCategoryVisibility(Category::Unknown_Cat));
 	ui->showCatOtherAct->setChecked(guiSettings->GetCategoryVisibility(Category::Others));
 
-	int idx = guiSettings->GetValue(GUI::gl_iconSize).toInt();
-	int index = GUI::gl_max_slider_pos / 4;
+	int idx = guiSettings->GetValue(gui::gl_iconSize).toInt();
+	int index = gui::gl_max_slider_pos / 4;
 	if (idx < index) ui->setIconSizeTinyAct->setChecked(true);
 	else if (idx < index * 2) ui->setIconSizeSmallAct->setChecked(true);
 	else if (idx < index * 3) ui->setIconSizeMediumAct->setChecked(true);
 	else ui->setIconSizeLargeAct->setChecked(true);
 
-	bool isListMode = guiSettings->GetValue(GUI::gl_listMode).toBool();
+	bool isListMode = guiSettings->GetValue(gui::gl_listMode).toBool();
 	if (isListMode) ui->setlistModeListAct->setChecked(true);
 	else ui->setlistModeGridAct->setChecked(true);
 	m_categoryVisibleActGroup->setEnabled(isListMode);
@@ -1679,7 +1619,7 @@ Check data for valid file types and cache their paths if necessary
 */
 int main_window::IsValidFile(const QMimeData& md, QStringList* dropPaths)
 {
-	int dropType = DROP_ERROR;
+	int dropType = drop_type::drop_error;
 
 	const QList<QUrl> list = md.urls(); // get list of all the dropped file urls
 
@@ -1692,47 +1632,47 @@ int main_window::IsValidFile(const QMimeData& md, QStringList* dropPaths)
 		// check for directories first, only valid if all other paths led to directories until now.
 		if (info.isDir())
 		{
-			if (dropType != DROP_DIR && dropType != DROP_ERROR)
+			if (dropType != drop_type::drop_dir && dropType != drop_type::drop_error)
 			{
-				return DROP_ERROR;
+				return drop_type::drop_error;
 			}
 
-			dropType = DROP_DIR;
+			dropType = drop_type::drop_dir;
 		}
 		else if (info.fileName() == "PS3UPDAT.PUP")
 		{
 			if (list.size() != 1)
 			{
-				return DROP_ERROR;
+				return drop_type::drop_error;
 			}
 
-			dropType = DROP_PUP;
+			dropType = drop_type::drop_pup;
 		}
 		else if (info.suffix().toLower() == "pkg")
 		{
-			if (dropType != DROP_PKG && dropType != DROP_ERROR)
+			if (dropType != drop_type::drop_pkg && dropType != drop_type::drop_error)
 			{
-				return DROP_ERROR;
+				return drop_type::drop_error;
 			}
 
-			dropType = DROP_PKG;
+			dropType = drop_type::drop_pkg;
 		}
 		else if (info.suffix() == "rap")
 		{
-			if (dropType != DROP_RAP && dropType != DROP_ERROR)
+			if (dropType != drop_type::drop_rap && dropType != drop_type::drop_error)
 			{
-				return DROP_ERROR;
+				return drop_type::drop_error;
 			}
 
-			dropType = DROP_RAP;
+			dropType = drop_type::drop_rap;
 		}
 		else if (list.size() == 1)
 		{
-			dropType = DROP_GAME;
+			dropType = drop_type::drop_game;
 		}
 		else
 		{
-			return DROP_ERROR;
+			return drop_type::drop_error;
 		}
 
 		if (dropPaths) // we only need to know the paths on drop
@@ -1750,18 +1690,18 @@ void main_window::dropEvent(QDropEvent* event)
 
 	switch (IsValidFile(*event->mimeData(), &dropPaths)) // get valid file paths and drop type
 	{
-	case DROP_ERROR:
+	case drop_type::drop_error:
 		break;
-	case DROP_PKG: // install the packages
+	case drop_type::drop_pkg: // install the packages
 		for (const auto& path : dropPaths)
 		{
 			InstallPkg(path);
 		}
 		break;
-	case DROP_PUP: // install the firmware
+	case drop_type::drop_pup: // install the firmware
 		InstallPup(dropPaths.first());
 		break;
-	case DROP_RAP: // import rap files to exdata dir
+	case drop_type::drop_rap: // import rap files to exdata dir
 		for (const auto& rap : dropPaths)
 		{
 			const std::string rapname = sstr(QFileInfo(rap).fileName());
@@ -1777,14 +1717,14 @@ void main_window::dropEvent(QDropEvent* event)
 			}
 		}
 		break;
-	case DROP_DIR: // import valid games to gamelist (games.yaml)
+	case drop_type::drop_dir: // import valid games to gamelist (games.yaml)
 		for (const auto& path : dropPaths)
 		{
 			AddGamesFromDir(path);
 		}
 		m_gameListFrame->Refresh(true);
 		break;
-	case DROP_GAME: // import valid games to gamelist (games.yaml)
+	case drop_type::drop_game: // import valid games to gamelist (games.yaml)
 		if (Emu.BootGame(sstr(dropPaths.first()), true))
 		{
 			LOG_SUCCESS(GENERAL, "Elf Boot from drag and drop done: %s", sstr(dropPaths.first()));
