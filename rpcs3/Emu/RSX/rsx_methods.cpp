@@ -50,7 +50,7 @@ namespace rsx
 	template<> struct vertex_data_type_from_element_type<float> { static const vertex_base_type type = vertex_base_type::f; };
 	template<> struct vertex_data_type_from_element_type<f16> { static const vertex_base_type type = vertex_base_type::sf; };
 	template<> struct vertex_data_type_from_element_type<u8> { static const vertex_base_type type = vertex_base_type::ub; };
-	template<> struct vertex_data_type_from_element_type<u16> { static const vertex_base_type type = vertex_base_type::s1; };
+	template<> struct vertex_data_type_from_element_type<u16> { static const vertex_base_type type = vertex_base_type::s32k; };
 
 	namespace nv406e
 	{
@@ -78,7 +78,17 @@ namespace rsx
 		void semaphore_release(thread* rsx, u32 _reg, u32 arg)
 		{
 			const u32 addr = get_address(method_registers.semaphore_offset_406e(), method_registers.semaphore_context_dma_406e());
+
+			if (addr >> 28 == 0x4)
+			{
+				// TODO: check no reservation area instead
+				vm::ps3::write32(addr, arg);
+				return;
+			}
+
+			vm::reader_lock lock;
 			vm::ps3::write32(addr, arg);
+			vm::notify(addr, 4);
 		}
 	}
 
@@ -193,7 +203,8 @@ namespace rsx
 		{
 			static void impl(thread* rsx, u32 _reg, u32 arg)
 			{
-				set_vertex_data_impl<NV4097_SET_VERTEX_DATA3F_M, index, 3, f32>(rsx, arg);
+				//NOTE: attributes are 16-byte aligned (Rachet & Clank 2)
+				set_vertex_data_impl<NV4097_SET_VERTEX_DATA3F_M, index, 4, f32>(rsx, arg);
 			}
 		};
 
@@ -459,6 +470,12 @@ namespace rsx
 		void set_surface_dirty_bit(thread* rsx, u32 _reg, u32)
 		{
 			rsx->m_rtts_dirty = true;
+		}
+
+		void set_surface_options_dirty_bit(thread* rsx, u32, u32)
+		{
+			if (rsx->m_framebuffer_state_contested)
+				rsx->m_rtts_dirty = true;
 		}
 
 		template<u32 index>
@@ -1511,7 +1528,7 @@ namespace rsx
 		bind_array<NV4097_SET_TEX_COORD_CONTROL, 1, 10, nullptr>();
 		bind_array<NV4097_SET_TRANSFORM_PROGRAM, 1, 32, nullptr>();
 		bind_array<NV4097_SET_POLYGON_STIPPLE_PATTERN, 1, 32, nullptr>();
-		bind_array<NV4097_SET_VERTEX_DATA3F_M, 1, 48, nullptr>();
+		bind_array<NV4097_SET_VERTEX_DATA3F_M, 1, 64, nullptr>();
 		bind_array<NV4097_SET_VERTEX_DATA_ARRAY_OFFSET, 1, 16, nullptr>();
 		bind_array<NV4097_SET_VERTEX_DATA_ARRAY_FORMAT, 1, 16, nullptr>();
 		bind_array<NV4097_SET_TEXTURE_CONTROL3, 1, 16, nullptr>();
@@ -1544,7 +1561,7 @@ namespace rsx
 		bind_range<NV4097_SET_VERTEX_DATA4UB_M, 1, 16, nv4097::set_vertex_data4ub_m>();
 		bind_range<NV4097_SET_VERTEX_DATA1F_M, 1, 16, nv4097::set_vertex_data1f_m>();
 		bind_range<NV4097_SET_VERTEX_DATA2F_M, 1, 32, nv4097::set_vertex_data2f_m>();
-		bind_range<NV4097_SET_VERTEX_DATA3F_M, 1, 48, nv4097::set_vertex_data3f_m>();
+		bind_range<NV4097_SET_VERTEX_DATA3F_M, 1, 64, nv4097::set_vertex_data3f_m>();
 		bind_range<NV4097_SET_VERTEX_DATA4F_M, 1, 64, nv4097::set_vertex_data4f_m>();
 		bind_range<NV4097_SET_VERTEX_DATA2S_M, 1, 16, nv4097::set_vertex_data2s_m>();
 		bind_range<NV4097_SET_VERTEX_DATA4S_M, 1, 32, nv4097::set_vertex_data4s_m>();
@@ -1565,6 +1582,11 @@ namespace rsx
 		bind<NV4097_SET_CONTEXT_DMA_COLOR_D, nv4097::set_surface_dirty_bit>();
 		bind<NV4097_SET_CONTEXT_DMA_ZETA, nv4097::set_surface_dirty_bit>();
 		bind<NV4097_SET_SURFACE_FORMAT, nv4097::set_surface_dirty_bit>();
+		bind<NV4097_SET_SURFACE_PITCH_A, nv4097::set_surface_dirty_bit>();
+		bind<NV4097_SET_SURFACE_PITCH_B, nv4097::set_surface_dirty_bit>();
+		bind<NV4097_SET_SURFACE_PITCH_C, nv4097::set_surface_dirty_bit>();
+		bind<NV4097_SET_SURFACE_PITCH_D, nv4097::set_surface_dirty_bit>();
+		bind<NV4097_SET_SURFACE_PITCH_Z, nv4097::set_surface_dirty_bit>();
 		bind_range<NV4097_SET_TEXTURE_OFFSET, 8, 16, nv4097::set_texture_dirty_bit>();
 		bind_range<NV4097_SET_TEXTURE_FORMAT, 8, 16, nv4097::set_texture_dirty_bit>();
 		bind_range<NV4097_SET_TEXTURE_ADDRESS, 8, 16, nv4097::set_texture_dirty_bit>();
@@ -1588,6 +1610,9 @@ namespace rsx
 		bind<NV4097_SET_ZCULL_STATS_ENABLE, nv4097::set_zcull_stats_enable>();
 		bind<NV4097_SET_ZPASS_PIXEL_COUNT_ENABLE, nv4097::set_zcull_pixel_count_enable>();
 		bind<NV4097_CLEAR_ZCULL_SURFACE, nv4097::clear_zcull>();
+		bind<NV4097_SET_DEPTH_TEST_ENABLE, nv4097::set_surface_options_dirty_bit>();
+		bind<NV4097_SET_DEPTH_MASK, nv4097::set_surface_options_dirty_bit>();
+		bind<NV4097_SET_COLOR_MASK, nv4097::set_surface_options_dirty_bit>();
 
 		//NV308A
 		bind_range<NV308A_COLOR, 1, 256, nv308a::color>();

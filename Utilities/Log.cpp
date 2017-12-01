@@ -45,6 +45,7 @@ void fmt_class_string<logs::level>::format(std::string& out, u64 arg)
 		case logs::level::warning: return "Warning";
 		case logs::level::notice: return "Notice";
 		case logs::level::trace: return "Trace";
+		case logs::level::_uninit: return unknown;
 		}
 
 		return unknown;
@@ -463,13 +464,13 @@ bool logs::file_writer::flush(u64 bufv)
 		const u64 size = std::min<u64>(end - st, sizeof(m_zout) / 2);
 
 		// Write uncompressed
-		if (m_fout && m_fout.write(m_fptr + st % s_log_size, size) != size)
+		if (m_fout && st < m_max_size && m_fout.write(m_fptr + st % s_log_size, size) != size)
 		{
 			m_fout.close();
 		}
 
 		// Write compressed
-		if (m_fout2)
+		if (m_fout2 && st < m_max_size)
 		{
 			m_zs.avail_in = size;
 			m_zs.next_in  = m_fptr + st % s_log_size;
@@ -588,6 +589,7 @@ void logs::file_listener::log(u64 stamp, const logs::message& msg, const std::st
 	case level::warning: text = u8"·W "; break;
 	case level::notice:  text = u8"·! "; break;
 	case level::trace:   text = u8"·T "; break;
+	case level::_uninit: text = u8"·  "; break;
 	}
 
 	// Print miscosecond timestamp

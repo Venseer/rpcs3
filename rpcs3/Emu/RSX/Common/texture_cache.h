@@ -138,7 +138,7 @@ namespace rsx
 	class texture_cache
 	{
 	private:
-		std::pair<std::array<u8, 4>, std::array<u8, 4>> default_remap_vector = 
+		std::pair<std::array<u8, 4>, std::array<u8, 4>> default_remap_vector =
 		{
 			{ CELL_GCM_TEXTURE_REMAP_FROM_A, CELL_GCM_TEXTURE_REMAP_FROM_R, CELL_GCM_TEXTURE_REMAP_FROM_G, CELL_GCM_TEXTURE_REMAP_FROM_B },
 			{ CELL_GCM_TEXTURE_REMAP_REMAP, CELL_GCM_TEXTURE_REMAP_REMAP, CELL_GCM_TEXTURE_REMAP_REMAP, CELL_GCM_TEXTURE_REMAP_REMAP }
@@ -271,12 +271,12 @@ namespace rsx
 
 		//Set when a hw blit engine incompatibility is detected
 		bool blit_engine_incompatibility_warning_raised = false;
-		
+
 		//Memory usage
 		const s32 m_max_zombie_objects = 64; //Limit on how many texture objects to keep around for reuse after they are invalidated
 		std::atomic<s32> m_unreleased_texture_objects = { 0 }; //Number of invalidated objects not yet freed from memory
 		std::atomic<u32> m_texture_memory_in_use = { 0 };
-		
+
 		/* Helpers */
 		virtual void free_texture_section(section_storage_type&) = 0;
 		virtual image_view_type create_temporary_subresource_view(commandbuffer_type&, image_resource_type* src, u32 gcm_format, u16 x, u16 y, u16 w, u16 h) = 0;
@@ -606,7 +606,7 @@ namespace rsx
 
 		texture_cache() {}
 		~texture_cache() {}
-		
+
 		virtual void destroy() = 0;
 		virtual bool is_depth_texture(const u32, const u32) = 0;
 		virtual void on_frame_end() = 0;
@@ -659,24 +659,48 @@ namespace rsx
 			if (found != m_cache.end())
 			{
 				auto &range_data = found->second;
+				std::pair<section_storage_type*, ranged_storage*> best_fit = {};
 
 				for (auto &tex : range_data.data)
 				{
-					if (tex.matches(rsx_address, rsx_size) && !tex.is_dirty())
+					if (tex.matches(rsx_address, rsx_size))
 					{
-						if (!confirm_dimensions || tex.matches(rsx_address, width, height, depth, mipmaps))
+						if (!tex.is_dirty())
 						{
-							if (!tex.is_locked() && tex.get_context() == texture_upload_context::framebuffer_storage)
-								range_data.notify(rsx_address, rsx_size);
+							if (!confirm_dimensions || tex.matches(rsx_address, width, height, depth, mipmaps))
+							{
+								if (!tex.is_locked() && tex.get_context() == texture_upload_context::framebuffer_storage)
+									range_data.notify(rsx_address, rsx_size);
 
-							return tex;
+								return tex;
+							}
+							else
+							{
+								LOG_ERROR(RSX, "Cached object for address 0x%X was found, but it does not match stored parameters.", rsx_address);
+								LOG_ERROR(RSX, "%d x %d vs %d x %d", width, height, tex.get_width(), tex.get_height());
+							}
 						}
-						else
+						else if (!best_fit.first)
 						{
-							LOG_ERROR(RSX, "Cached object for address 0x%X was found, but it does not match stored parameters.", rsx_address);
-							LOG_ERROR(RSX, "%d x %d vs %d x %d", width, height, tex.get_width(), tex.get_height());
+							//By grabbing a ref to a matching entry, duplicates are avoided
+							best_fit = { &tex, &range_data };
 						}
 					}
+				}
+
+				if (best_fit.first)
+				{
+					if (best_fit.first->exists())
+					{
+						if (best_fit.first->get_context() != rsx::texture_upload_context::framebuffer_storage)
+							m_texture_memory_in_use -= best_fit.first->get_section_size();
+
+						m_unreleased_texture_objects--;
+						free_texture_section(*best_fit.first);
+					}
+
+					best_fit.second->notify(rsx_address, rsx_size);
+					return *best_fit.first;
 				}
 
 				for (auto &tex : range_data.data)
@@ -685,9 +709,11 @@ namespace rsx
 					{
 						if (tex.exists())
 						{
+							if (tex.get_context() != rsx::texture_upload_context::framebuffer_storage)
+								m_texture_memory_in_use -= tex.get_section_size();
+
 							m_unreleased_texture_objects--;
 							free_texture_section(tex);
-							m_texture_memory_in_use -= tex.get_section_size();
 						}
 
 						range_data.notify(rsx_address, rsx_size);
@@ -726,20 +752,20 @@ namespace rsx
 			writer_lock lock(m_cache_mutex);
 			section_storage_type& region = find_cached_texture(memory_address, memory_size, false);
 
+			if (region.get_context() != texture_upload_context::framebuffer_storage &&
+				region.exists())
+			{
+				//This space was being used for other purposes other than framebuffer storage
+				//Delete used resources before attaching it to framebuffer memory
+				free_texture_section(region);
+				m_texture_memory_in_use -= region.get_section_size();
+			}
+
 			if (!region.is_locked())
 			{
 				region.reset(memory_address, memory_size);
 				region.set_dirty(false);
 				no_access_range = region.get_min_max(no_access_range);
-			}
-			else
-			{
-				if (region.get_context() != texture_upload_context::framebuffer_storage)
-				{
-					//This space was being used for other purposes other than framebuffer storage
-					//Delete used resources before attaching it to framebuffer memory
-					free_texture_section(region);
-				}
 			}
 
 			region.protect(utils::protection::no);
@@ -768,7 +794,7 @@ namespace rsx
 			region->copy_texture(false, std::forward<Args>(extra)...);
 			return true;
 		}
-		
+
 		template <typename ...Args>
 		bool load_memory_from_cache(const u32 memory_address, const u32 memory_size, Args&&... extras)
 		{
@@ -970,7 +996,7 @@ namespace rsx
 					value.misses--;
 			}
 		}
-		
+
 		void purge_dirty()
 		{
 			writer_lock lock(m_cache_mutex);
@@ -991,8 +1017,12 @@ namespace rsx
 					if (!tex.is_dirty())
 						continue;
 
-					free_texture_section(tex);
-					m_texture_memory_in_use -= tex.get_section_size();
+					if (tex.exists() &&
+						tex.get_context() != rsx::texture_upload_context::framebuffer_storage)
+					{
+						free_texture_section(tex);
+						m_texture_memory_in_use -= tex.get_section_size();
+					}
 				}
 			}
 
@@ -1001,7 +1031,7 @@ namespace rsx
 			{
 				m_cache.erase(address);
 			}
-			
+
 			m_unreleased_texture_objects = 0;
 		}
 
@@ -1209,7 +1239,7 @@ namespace rsx
 
 			if (!texaddr || !tex_size)
 			{
-				LOG_ERROR(RSX, "Texture upload requested but texture not found, (address=0x%X, size=0x%X)", texaddr, tex_size);
+				LOG_ERROR(RSX, "Texture upload requested but texture not found, (address=0x%X, size=0x%X, w=%d, h=%d, p=%d, format=0x%X)", texaddr, tex_size, tex.width(), tex.height(), tex.pitch(), tex.format());
 				return {};
 			}
 
@@ -1310,7 +1340,7 @@ namespace rsx
 						get_native_dimensions(internal_width, internal_height, rsc.surface);
 						if (!rsc.is_bound || !g_cfg.video.strict_rendering_mode)
 						{
-							if (rsc.w == internal_width && rsc.h == internal_height)
+							if (!rsc.x && !rsc.y && rsc.w == internal_width && rsc.h == internal_height)
 							{
 								if (rsc.is_bound)
 								{
@@ -1344,10 +1374,22 @@ namespace rsx
 				auto cached_texture = find_texture_from_dimensions(texaddr, tex_width, tex_height, depth);
 				if (cached_texture)
 				{
-					if (cached_texture->get_image_type() == rsx::texture_dimension_extended::texture_dimension_1d)
-						scale_y = 0.f;
+					//TODO: Handle invalidated framebuffer textures better. This is awful
+					if (cached_texture->get_context() == rsx::texture_upload_context::framebuffer_storage)
+					{
+						if (!cached_texture->is_locked())
+						{
+							cached_texture->set_dirty(true);
+							m_unreleased_texture_objects++;
+						}
+					}
+					else
+					{
+						if (cached_texture->get_image_type() == rsx::texture_dimension_extended::texture_dimension_1d)
+							scale_y = 0.f;
 
-					return{ cached_texture->get_raw_view(), cached_texture->get_context(), cached_texture->is_depth_texture(), scale_x, scale_y, cached_texture->get_image_type() };
+						return{ cached_texture->get_raw_view(), cached_texture->get_context(), cached_texture->is_depth_texture(), scale_x, scale_y, cached_texture->get_image_type() };
+					}
 				}
 
 				if ((!blit_engine_incompatibility_warning_raised && g_cfg.video.use_gpu_texture_scaling) || is_hw_blit_engine_compatible(format))

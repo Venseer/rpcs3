@@ -24,7 +24,7 @@
 #include <QLabel>
 #include <QScrollBar>
 
-inline std::string sstr(const QString& _in) { return _in.toUtf8().toStdString(); }
+inline std::string sstr(const QString& _in) { return _in.toStdString(); }
 inline QSize sizeFromSlider(const int& pos) { return gui::gl_icon_size_min + (gui::gl_icon_size_max - gui::gl_icon_size_min) * (pos / (float)gui::gl_max_slider_pos); }
 
 game_list_frame::game_list_frame(std::shared_ptr<gui_settings> guiSettings, std::shared_ptr<emu_settings> emuSettings, QWidget *parent)
@@ -742,6 +742,7 @@ bool game_list_frame::Boot(const GameInfo& game)
 {
 	Q_EMIT RequestIconPathSet(game.path);
 
+	Emu.SetForceBoot(true);
 	Emu.Stop();
 
 	if (!Emu.BootGame(game.path))

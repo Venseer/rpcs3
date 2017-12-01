@@ -308,9 +308,20 @@ namespace vk
 			{
 				//Scale image to fit
 				//usually we can just get away with nearest filtering
-				const u8 samples = rsx_pitch / real_pitch;
+				u8 samples_u = 1, samples_v = 1;
+				switch (static_cast<vk::render_target*>(vram_texture)->aa_mode)
+				{
+				case rsx::surface_antialiasing::diagonal_centered_2_samples:
+					samples_u = 2;
+					break;
+				case rsx::surface_antialiasing::square_centered_4_samples:
+				case rsx::surface_antialiasing::square_rotated_4_samples:
+					samples_u = 2;
+					samples_v = 2;
+					break;
+				}
 
-				rsx::scale_image_nearest(pixels_dst, pixels_src, width, height, rsx_pitch, real_pitch, bpp, samples, pack_unpack_swap_bytes);
+				rsx::scale_image_nearest(pixels_dst, pixels_src, width, height, rsx_pitch, real_pitch, bpp, samples_u, samples_v, pack_unpack_swap_bytes);
 			}
 
 			dma_buffer->unmap();
@@ -454,7 +465,7 @@ namespace vk
 			tex.destroy();
 		}
 
-		vk::image_view* create_temporary_subresource_view_impl(vk::command_buffer& cmd, vk::image* source, VkImageType image_type, VkImageViewType view_type, u16 x, u16 y, u16 w, u16 h)
+		vk::image_view* create_temporary_subresource_view_impl(vk::command_buffer& cmd, vk::image* source, VkImageType image_type, VkImageViewType view_type, u32 gcm_format, u16 x, u16 y, u16 w, u16 h)
 		{
 			VkImageAspectFlags aspect = VK_IMAGE_ASPECT_COLOR_BIT;
 
@@ -469,6 +480,13 @@ namespace vk
 				break;
 			}
 
+			VkFormat dst_format = vk::get_compatible_sampler_format(gcm_format);
+			if (aspect & VK_IMAGE_ASPECT_DEPTH_BIT ||
+				vk::get_format_texel_width(dst_format) != vk::get_format_texel_width(source->info.format))
+			{
+				dst_format = source->info.format;
+			}
+
 			VkImageSubresourceRange subresource_range = { aspect, 0, 1, 0, 1 };
 
 			std::unique_ptr<vk::image> image;
@@ -476,12 +494,12 @@ namespace vk
 
 			image.reset(new vk::image(*vk::get_current_renderer(), m_memory_types.device_local, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT,
 				image_type,
-				source->info.format,
+				dst_format,
 				w, h, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
 				VK_IMAGE_TILING_OPTIMAL, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, source->info.flags));
 
 			VkImageSubresourceRange view_range = { aspect & ~(VK_IMAGE_ASPECT_STENCIL_BIT), 0, 1, 0, 1 };
-			view.reset(new vk::image_view(*vk::get_current_renderer(), image->value, view_type, source->info.format, source->native_component_map, view_range));
+			view.reset(new vk::image_view(*vk::get_current_renderer(), image->value, view_type, dst_format, source->native_component_map, view_range));
 
 			VkImageLayout old_src_layout = source->current_layout;
 
@@ -507,9 +525,9 @@ namespace vk
 			return m_discardable_storage.back().view.get();
 		}
 
-		vk::image_view* create_temporary_subresource_view(vk::command_buffer& cmd, vk::image* source, u32 /*gcm_format*/, u16 x, u16 y, u16 w, u16 h) override
+		vk::image_view* create_temporary_subresource_view(vk::command_buffer& cmd, vk::image* source, u32 gcm_format, u16 x, u16 y, u16 w, u16 h) override
 		{
-			return create_temporary_subresource_view_impl(cmd, source, source->info.imageType, VK_IMAGE_VIEW_TYPE_2D, x, y, w, h);
+			return create_temporary_subresource_view_impl(cmd, source, source->info.imageType, VK_IMAGE_VIEW_TYPE_2D, gcm_format, x, y, w, h);
 		}
 
 		vk::image_view* create_temporary_subresource_view(vk::command_buffer& cmd, vk::image** source, u32 gcm_format, u16 x, u16 y, u16 w, u16 h) override
@@ -899,7 +917,7 @@ namespace vk
 					}
 
 					copy_scaled_image(*commands, src->value, dst->value, src->current_layout, dst->current_layout, src_area.x1, src_area.y1, src_area.x2 - src_area.x1, src_area.y2 - src_area.y1,
-						dst_area.x1, dst_area.y1, dst_area.x2 - dst_area.x1, dst_area.y2 - dst_area.y1, 1, aspect);
+						dst_area.x1, dst_area.y1, dst_area.x2 - dst_area.x1, dst_area.y2 - dst_area.y1, 1, aspect, src->info.format == dst->info.format);
 
 					change_image_layout(*commands, dst, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, {(VkImageAspectFlags)aspect, 0, dst->info.mipLevels, 0, dst->info.arrayLayers});
 				}

@@ -6,7 +6,7 @@
 #include <QDir>
 #include <QMessageBox>
 
-inline std::string sstr(const QString& _in) { return _in.toUtf8().toStdString(); }
+inline std::string sstr(const QString& _in) { return _in.toStdString(); }
 
 gui_settings::gui_settings(QObject* parent) : QObject(parent), m_settings(ComputeSettingsDir() + tr("CurrentSettings") + ".ini", QSettings::Format::IniFormat, parent),
 	m_settingsDir(ComputeSettingsDir())
@@ -268,10 +268,10 @@ void gui_settings::ShowInfoBox(const gui_save& entry, const QString& title, cons
 		if (mb->checkBox()->isChecked())
 		{
 			SetValue(entry, false);
-			LOG_WARNING(GENERAL, "Entry %s was set to false", sstr(entry.name));
+			LOG_NOTICE(GENERAL, "Info Box for Entry %s is now disabled", sstr(entry.name));
 		}
 	}
-	else LOG_WARNING(GENERAL, "Entry %s is false, Info Box not shown", sstr(entry.name));
+	else LOG_NOTICE(GENERAL, "Info Box for Entry %s was ignored", sstr(entry.name));
 }
 
 void gui_settings::SetGamelistColVisibility(int col, bool val)
