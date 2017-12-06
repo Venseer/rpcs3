@@ -408,6 +408,14 @@ protected:
 		return 255.0f * val;
 	};
 
+	// Get new scaled value between -255 and 255 based on its minimum and maximum
+	float ScaleStickInput2(s32 raw_value, int minimum, int maximum)
+	{
+		// value based on max range converted to [0, 1]
+		float val = float(Clamp(raw_value, minimum, maximum) - minimum) / float(abs(maximum) + abs(minimum));
+		return (510.0f * val) - 255.0f;
+	};
+
 	// normalizes a directed input, meaning it will correspond to a single "button" and not an axis with two directions
 	// the input values must lie in 0+
 	u16 NormalizeDirectedInput(u16 raw_value, float threshold, float maximum)

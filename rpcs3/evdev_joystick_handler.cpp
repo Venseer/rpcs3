@@ -187,27 +187,20 @@ std::unordered_map<u64, std::pair<u16, bool>> evdev_joystick_handler::GetButtonV
 		if (libevdev_fetch_event_value(dev, EV_ABS, code, &val) == 0)
 			continue;
 
-		float fvalue = ScaleStickInput(val, libevdev_get_abs_minimum(dev, code), libevdev_get_abs_maximum(dev, code));
-
 		// Triggers should be ABS_Z and ABS_RZ and do not need handling of negative values
 		if (code == ABS_Z || code == ABS_RZ)
 		{
+			float fvalue = ScaleStickInput(val, libevdev_get_abs_minimum(dev, code), libevdev_get_abs_maximum(dev, code));
 			button_values.emplace(code, std::make_pair<u16, bool>(static_cast<u16>(fvalue), false));
 			continue;
 		}
 
-		bool is_negative = fvalue <= 127.5;
+		float fvalue = ScaleStickInput2(val, libevdev_get_abs_minimum(dev, code), libevdev_get_abs_maximum(dev, code));
 
-		if (is_negative)
-		{
-			u16 value = Clamp0To255((127.5f - fvalue) * 2.0f);
-			button_values.emplace(code, std::make_pair<u16, bool>(static_cast<u16>(value), true));
-		}
+		if (fvalue < 0)
+			button_values.emplace(code, std::make_pair<u16, bool>(static_cast<u16>(std::abs(fvalue)), true));
 		else
-		{
-			u16 value = Clamp0To255((fvalue - 127.5f) * 2.0f);
-			button_values.emplace(code, std::make_pair<u16, bool>(static_cast<u16>(value), false));
-		}
+			button_values.emplace(code, std::make_pair<u16, bool>(static_cast<u16>(fvalue), false));
 	}
 
 	return button_values;
@@ -221,12 +214,14 @@ void evdev_joystick_handler::GetNextButtonPress(const std::string& padId, const 
 	// Add device if not yet present
 	m_pad_index = add_device(padId, true);
 
-	if (m_pad_index < 0) return;
+	if (m_pad_index < 0)
+		return;
 
 	EvdevDevice& device = devices[m_pad_index];
 
 	// Check if our device is connected
-	if (!update_device(device, false)) return;
+	if (!update_device(device, false))
+		return;
 
 	auto& dev = device.device;
 
@@ -236,10 +231,11 @@ void evdev_joystick_handler::GetNextButtonPress(const std::string& padId, const 
 
 	// Grab any pending sync event.
 	if (ret == LIBEVDEV_READ_STATUS_SYNC)
-	{
 		ret = libevdev_next_event(dev, LIBEVDEV_READ_FLAG_NORMAL | LIBEVDEV_READ_FLAG_SYNC, &evt);
-	}
-	if (ret < 0) return;
+
+	// return if nothing new has happened. ignore this to get the current state for blacklist
+	if (!get_blacklist && ret < 0)
+		return;
 
 	auto data = GetButtonValues(dev);
 
@@ -415,21 +411,16 @@ int evdev_joystick_handler::GetButtonInfo(const input_event& evt, libevdev* dev,
 	}
 	case EV_ABS:
 	{
-		float fvalue = ScaleStickInput(val, libevdev_get_abs_minimum(dev, code), libevdev_get_abs_maximum(dev, code));
-
 		// Triggers should be ABS_Z and ABS_RZ and do not need handling of negative values
 		if (code == ABS_Z || code == ABS_RZ)
 		{
-			value = static_cast<u16>(fvalue);
+			value = static_cast<u16>(ScaleStickInput(val, libevdev_get_abs_minimum(dev, code), libevdev_get_abs_maximum(dev, code)));
 			return code;
 		}
 
-		is_negative = fvalue <= 127.5;
-
-		if (is_negative)
-			value = Clamp0To255((127.5f - fvalue) * 2.0f);
-		else
-			value = Clamp0To255((fvalue - 127.5f) * 2.0f);
+		float fvalue = ScaleStickInput2(val, libevdev_get_abs_minimum(dev, code), libevdev_get_abs_maximum(dev, code));
+		is_negative = fvalue < 0;
+		value = static_cast<u16>(std::abs(fvalue));
 
 		return code;
 	}

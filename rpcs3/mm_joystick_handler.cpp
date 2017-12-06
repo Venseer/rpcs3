@@ -2,18 +2,6 @@
 #ifdef _WIN32
 #include "mm_joystick_handler.h"
 
-namespace
-{
-	const DWORD THREAD_SLEEP = 10;
-	const DWORD THREAD_SLEEP_INACTIVE = 100;
-	const DWORD THREAD_TIMEOUT = 1000;
-
-	inline u16 ConvertAxis(DWORD value)
-	{
-		return static_cast<u16>((value) >> 8);
-	}
-}
-
 mm_joystick_handler::mm_joystick_handler() : is_init(false)
 {
 	// Define border values
@@ -97,25 +85,11 @@ bool mm_joystick_handler::Init()
 
 	for (u32 i = 0; i < supportedJoysticks; i++)
 	{
-		JOYINFOEX js_info;
-		JOYCAPS js_caps;
-		js_info.dwSize = sizeof(js_info);
-		js_info.dwFlags = JOY_RETURNALL;
-		joyGetDevCaps(i, &js_caps, sizeof(js_caps));
+		MMJOYDevice dev;
 
-		if (joyGetPosEx(i, &js_info) != JOYERR_NOERROR)
+		if (GetMMJOYDevice(i, dev) == false)
 			continue;
 
-		char drv[32];
-		wcstombs(drv, js_caps.szPname, 31);
-
-		LOG_NOTICE(GENERAL, "Joystick nr.%d found. Driver: %s", i, drv);
-
-		MMJOYDevice dev;
-		dev.device_id = i;
-		dev.device_name = fmt::format("Joystick #%d", i);
-		dev.device_info = js_info;
-		dev.device_caps = js_caps;
 		m_devices.emplace(i, dev);
 	}
 
@@ -140,13 +114,12 @@ std::vector<std::string> mm_joystick_handler::ListDevices()
 
 bool mm_joystick_handler::bindPadToDevice(std::shared_ptr<Pad> pad, const std::string& device)
 {
-	if (!Init()) return false;
+	if (!Init())
+		return false;
 
 	int id = GetIDByName(device);
 	if (id < 0)
-	{
 		return false;
-	}
 
 	std::shared_ptr<MMJOYDevice> joy_device = std::make_shared<MMJOYDevice>(m_devices.at(id));
 
@@ -228,7 +201,11 @@ void mm_joystick_handler::ThreadProc()
 		case JOYERR_NOERROR:
 			++online;
 			if (last_connection_status[i] == false)
+			{
+				if (GetMMJOYDevice(dev->device_id, *dev) == false)
+				 continue;
 				pad->m_port_status |= CELL_PAD_STATUS_ASSIGN_CHANGES;
+			}
 			last_connection_status[i] = true;
 			pad->m_port_status |= CELL_PAD_STATUS_CONNECTED;
 
@@ -460,37 +437,85 @@ std::unordered_map<u64, u16> mm_joystick_handler::GetButtonValues(const JOYINFOE
 		button_values.emplace(entry.first, js_info.dwButtons & entry.first ? 255 : 0);
 	}
 
-	for (auto entry : pov_list)
+	if (js_caps.wCaps & JOYCAPS_HASPOV)
 	{
-		button_values.emplace(entry.first, js_info.dwPOV == entry.first ? 255 : 0);
+		if (js_caps.wCaps & JOYCAPS_POVCTS)
+		{
+			if (js_info.dwPOV == JOY_POVCENTERED)
+			{
+				button_values.emplace(JOY_POVFORWARD,  0);
+				button_values.emplace(JOY_POVRIGHT,    0);
+				button_values.emplace(JOY_POVBACKWARD, 0);
+				button_values.emplace(JOY_POVLEFT,     0);
+			}
+			else
+			{
+				auto emplacePOVs = [&](float val, u64 pov_neg, u64 pov_pos)
+				{
+					if (val < 0)
+					{
+						button_values.emplace(pov_neg, static_cast<u16>(std::abs(val)));
+						button_values.emplace(pov_pos, 0);
+					}
+					else
+					{
+						button_values.emplace(pov_neg, 0);
+						button_values.emplace(pov_pos, static_cast<u16>(val));
+					}
+				};
+
+				float rad = static_cast<float>(js_info.dwPOV / 100 * acos(-1) / 180);
+				emplacePOVs(std::cosf(rad) * 255.0f, JOY_POVBACKWARD, JOY_POVFORWARD);
+				emplacePOVs(std::sinf(rad) * 255.0f, JOY_POVLEFT, JOY_POVRIGHT);
+			}
+		}
+		else if (js_caps.wCaps & JOYCAPS_POV4DIR)
+		{
+			u64 val = js_info.dwPOV;
+
+			auto emplacePOV = [&button_values, &val](u64 pov)
+			{
+				int cw = pov + 4500, ccw = pov - 4500;
+				bool pressed = (val == pov) || (val == cw) || (ccw < 0 ? val == 36000 - std::abs(ccw) : val == ccw);
+				button_values.emplace(pov, pressed ? 255 : 0);
+			};
+
+			emplacePOV(JOY_POVFORWARD);
+			emplacePOV(JOY_POVRIGHT);
+			emplacePOV(JOY_POVBACKWARD);
+			emplacePOV(JOY_POVLEFT);
+		}
 	}
 
 	auto add_axis_value = [&](DWORD axis, UINT min, UINT max, u64 pos, u64 neg)
 	{
-		u16 value = 0;
-		float fvalue = ScaleStickInput(axis, min, max);
-		bool is_negative = fvalue <= 127.5;
-
-		if (is_negative)
+		float val = ScaleStickInput2(axis, min, max);
+		if (val < 0)
 		{
-			value = Clamp0To255((127.5f - fvalue) * 2.0f);
 			button_values.emplace(pos, 0);
-			button_values.emplace(neg, value);
+			button_values.emplace(neg, static_cast<u16>(std::abs(val)));
 		}
 		else
 		{
-			value = Clamp0To255((fvalue - 127.5f) * 2.0f);
-			button_values.emplace(pos, value);
+			button_values.emplace(pos, static_cast<u16>(val));
 			button_values.emplace(neg, 0);
 		}
 	};
 
 	add_axis_value(js_info.dwXpos, js_caps.wXmin, js_caps.wXmax, mmjoy_axis::joy_x_pos, mmjoy_axis::joy_x_neg);
 	add_axis_value(js_info.dwYpos, js_caps.wYmin, js_caps.wYmax, mmjoy_axis::joy_y_neg, mmjoy_axis::joy_y_pos);
-	add_axis_value(js_info.dwZpos, js_caps.wZmin, js_caps.wZmax, mmjoy_axis::joy_z_neg, mmjoy_axis::joy_z_pos);
-	add_axis_value(js_info.dwRpos, js_caps.wRmin, js_caps.wRmax, mmjoy_axis::joy_r_neg, mmjoy_axis::joy_r_pos);
-	add_axis_value(js_info.dwUpos, js_caps.wUmin, js_caps.wUmax, mmjoy_axis::joy_u_pos, mmjoy_axis::joy_u_neg);
-	add_axis_value(js_info.dwVpos, js_caps.wVmin, js_caps.wVmax, mmjoy_axis::joy_v_pos, mmjoy_axis::joy_v_neg);
+
+	if (js_caps.wCaps & JOYCAPS_HASZ)
+		add_axis_value(js_info.dwZpos, js_caps.wZmin, js_caps.wZmax, mmjoy_axis::joy_z_neg, mmjoy_axis::joy_z_pos);
+
+	if (js_caps.wCaps & JOYCAPS_HASR)
+		add_axis_value(js_info.dwRpos, js_caps.wRmin, js_caps.wRmax, mmjoy_axis::joy_r_neg, mmjoy_axis::joy_r_pos);
+
+	if (js_caps.wCaps & JOYCAPS_HASU)
+		add_axis_value(js_info.dwUpos, js_caps.wUmin, js_caps.wUmax, mmjoy_axis::joy_u_pos, mmjoy_axis::joy_u_neg);
+
+	if (js_caps.wCaps & JOYCAPS_HASV)
+		add_axis_value(js_info.dwVpos, js_caps.wVmin, js_caps.wVmax, mmjoy_axis::joy_v_pos, mmjoy_axis::joy_v_neg);
 
 	return button_values;
 }
@@ -505,6 +530,30 @@ int mm_joystick_handler::GetIDByName(const std::string& name)
 		}
 	}
 	return -1;
+}
+
+bool mm_joystick_handler::GetMMJOYDevice(int index, MMJOYDevice& dev)
+{
+	JOYINFOEX js_info;
+	JOYCAPS js_caps;
+	js_info.dwSize = sizeof(js_info);
+	js_info.dwFlags = JOY_RETURNALL;
+	joyGetDevCaps(index, &js_caps, sizeof(js_caps));
+
+	if (joyGetPosEx(index, &js_info) != JOYERR_NOERROR)
+		return false;
+
+	char drv[32];
+	wcstombs(drv, js_caps.szPname, 31);
+
+	LOG_NOTICE(GENERAL, "Joystick nr.%d found. Driver: %s", index, drv);
+
+	dev.device_id = index;
+	dev.device_name = fmt::format("Joystick #%d", index);
+	dev.device_info = js_info;
+	dev.device_caps = js_caps;
+
+	return true;
 }
 
 #endif
