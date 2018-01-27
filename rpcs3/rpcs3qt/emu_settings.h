@@ -30,12 +30,13 @@ public:
 		SPUDecoder,
 		LibLoadOptions,
 		HookStaticFuncs,
-		BindSPUThreads,
+		EnableThreadScheduler,
 		LowerSPUThreadPrio,
 		SPULoopDetection,
 		PreferredSPUThreads,
 		PPUDebug,
 		SPUDebug,
+		MaxLLVMThreads,
 
 		// Graphics
 		Renderer,
@@ -85,6 +86,7 @@ public:
 		ShowFPSInTitle,
 		ShowTrophyPopups,
 		ShowWelcomeScreen,
+		UseNativeInterface,
 
 		// Network
 		ConnectionStatus,
@@ -142,7 +144,7 @@ public:
 	~emu_settings();
 
 	/** Connects a combo box with the target settings type*/
-	void EnhanceComboBox(QComboBox* combobox, SettingsType type, bool is_ranged = false);
+	void EnhanceComboBox(QComboBox* combobox, SettingsType type, bool is_ranged = false, bool use_max = false, int max = 0);
 
 	/** Connects a check box with the target settings type*/
 	void EnhanceCheckBox(QCheckBox* checkbox, SettingsType type);
@@ -182,16 +184,17 @@ private:
 	const QMap<SettingsType, cfg_location> SettingsLoc =
 	{
 		// Core Tab
-		{ PPUDecoder,          { "Core", "PPU Decoder"}},
-		{ SPUDecoder,          { "Core", "SPU Decoder"}},
-		{ LibLoadOptions,      { "Core", "Lib Loader"}},
-		{ HookStaticFuncs,     { "Core", "Hook static functions"}},
-		{ BindSPUThreads,      { "Core", "Bind SPU threads to secondary cores"}},
-		{ LowerSPUThreadPrio,  { "Core", "Lower SPU thread priority"}},
-		{ SPULoopDetection,    { "Core", "SPU loop detection"}},
-		{ PreferredSPUThreads, { "Core", "Preferred SPU Threads"}},
-		{ PPUDebug,            { "Core", "PPU Debug"}},
-		{ SPUDebug,            { "Core", "SPU Debug"}},
+		{ PPUDecoder,               { "Core", "PPU Decoder"}},
+		{ SPUDecoder,               { "Core", "SPU Decoder"}},
+		{ LibLoadOptions,           { "Core", "Lib Loader"}},
+		{ HookStaticFuncs,          { "Core", "Hook static functions"}},
+		{ EnableThreadScheduler,    { "Core", "Enable thread scheduler"}},
+		{ LowerSPUThreadPrio,       { "Core", "Lower SPU thread priority"}},
+		{ SPULoopDetection,         { "Core", "SPU loop detection"}},
+		{ PreferredSPUThreads,      { "Core", "Preferred SPU Threads"}},
+		{ PPUDebug,                 { "Core", "PPU Debug"}},
+		{ SPUDebug,                 { "Core", "SPU Debug"}},
+		{ MaxLLVMThreads,           { "Core", "Max LLVM Compile Threads"}},
 
 		// Graphics Tab
 		{ Renderer,                 { "Video", "Renderer"}},
@@ -241,6 +244,7 @@ private:
 		{ShowFPSInTitle,      { "Miscellaneous", "Show FPS counter in window title"}},
 		{ShowTrophyPopups,    { "Miscellaneous", "Show trophy popups"}},
 		{ShowWelcomeScreen,   { "Miscellaneous", "Show Welcome Screen"}},
+		{UseNativeInterface,  { "Miscellaneous", "Use native user interface"}},
 
 		// Networking
 		{ConnectionStatus, { "Net", "Connection status"}},
