@@ -13,11 +13,11 @@
 #include "Emu/Cell/SPUDisAsm.h"
 #include "Emu/Cell/PPUInterpreter.h"
 
+#include "custom_dock_widget.h"
 #include "instruction_editor_dialog.h"
 #include "register_editor_dialog.h"
 #include "gui_settings.h"
 
-#include <QDockWidget>
 #include <QListWidget>
 #include <QPushButton>
 #include <QComboBox>
@@ -29,7 +29,7 @@
 
 class debugger_list;
 
-class debugger_frame : public QDockWidget
+class debugger_frame : public custom_dock_widget
 {
 	Q_OBJECT
 
@@ -86,9 +86,9 @@ public:
 
 protected:
 	/** Override inherited method from Qt to allow signalling when close happened.*/
-	void closeEvent(QCloseEvent* event);
-	void showEvent(QShowEvent* event);
-	void hideEvent(QHideEvent* event);
+	void closeEvent(QCloseEvent* event) override;
+	void showEvent(QShowEvent* event) override;
+	void hideEvent(QHideEvent* event) override;
 
 Q_SIGNALS:
 	void DebugFrameClosed();
