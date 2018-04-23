@@ -391,7 +391,7 @@ void Emulator::Load(bool add_only)
 
 			return fs::file{elf_dir + "/../PARAM.SFO"};
 		}());
-		m_title = psf::get_string(_psf, "TITLE", m_path);
+		m_title = psf::get_string(_psf, "TITLE", m_path.substr(m_path.find_last_of('/') + 1));
 		m_title_id = psf::get_string(_psf, "TITLE_ID");
 		m_cat = psf::get_string(_psf, "CATEGORY");
 
@@ -406,8 +406,16 @@ void Emulator::Load(bool add_only)
 		LOG_NOTICE(LOADER, "Category: %s", GetCat());
 
 		// Initialize data/cache directory
-		m_cache_path = fs::get_data_dir(m_title_id, m_path);
-		LOG_NOTICE(LOADER, "Cache: %s", GetCachePath());
+		if (fs::is_dir(m_path))
+		{
+			m_cache_path = fs::get_config_dir() + "data/" + GetTitleID() + '/';
+			LOG_NOTICE(LOADER, "Cache: %s", GetCachePath());
+		}
+		else
+		{
+			m_cache_path = fs::get_data_dir(m_title_id, m_path);
+			LOG_NOTICE(LOADER, "Cache: %s", GetCachePath());
+		}
 
 		// Load custom config-0
 		if (fs::file cfg_file{m_cache_path + "/config.yml"})
@@ -839,6 +847,12 @@ void Emulator::Load(bool add_only)
 				}
 
 				LOG_NOTICE(LOADER, "Elf path: %s", argv[0]);
+			}
+
+			if (g_cfg.core.spu_debug)
+			{
+				fs::file log(Emu.GetCachePath() + "SPUJIT.log", fs::rewrite);
+				log.write(fmt::format("SPU JIT Log\n\nTitle: %s\nTitle ID: %s\n\n", Emu.GetTitle(), Emu.GetTitleID()));
 			}
 
 			ppu_load_exec(ppu_exec);
