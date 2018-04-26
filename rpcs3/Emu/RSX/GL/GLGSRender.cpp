@@ -209,7 +209,7 @@ void GLGSRender::end()
 	//If ds is not initialized clear it; it seems new depth textures should have depth cleared
 	auto copy_rtt_contents = [](gl::render_target *surface)
 	{
-		if (surface->get_compatible_internal_format() == surface->old_contents->get_compatible_internal_format())
+		if (surface->get_internal_format() == surface->old_contents->get_internal_format())
 		{
 			//Copy data from old contents onto this one
 			//1. Clip a rectangular region defning the data
@@ -259,7 +259,7 @@ void GLGSRender::end()
 		if (clear_depth)
 		{
 			gl_state.depth_mask(GL_TRUE);
-			gl_state.clear_depth(1.0);
+			gl_state.clear_depth(1.f);
 			gl_state.clear_stencil(255);
 			mask |= GL_DEPTH_BUFFER_BIT | GL_STENCIL_BUFFER_BIT;
 		}
@@ -284,7 +284,7 @@ void GLGSRender::end()
 	}
 
 	if (ds && ds->old_contents != nullptr && ds->get_rsx_pitch() == ds->old_contents->get_rsx_pitch() &&
-		ds->old_contents->get_compatible_internal_format() == gl::texture::internal_format::rgba8)
+		ds->old_contents->get_internal_format() == gl::texture::internal_format::rgba8)
 	{
 		m_depth_converter.run(ds->width(), ds->height(), ds->id(), ds->old_contents->id());
 		ds->old_contents = nullptr;
@@ -401,6 +401,8 @@ void GLGSRender::end()
 	//Bind textures and resolve external copy operations
 	std::chrono::time_point<steady_clock> textures_start = steady_clock::now();
 	int unused_location;
+	void *unused = nullptr;
+	gl::texture_view* tmp_view;
 
 	for (int i = 0; i < rsx::limits::fragment_textures_count; ++i)
 	{
@@ -413,18 +415,18 @@ void GLGSRender::end()
 
 			if (tex.enabled())
 			{
-				GLenum target = gl::get_target(sampler_state->image_type);
 				if (sampler_state->image_handle)
 				{
-					glBindTexture(target, sampler_state->image_handle);
+					sampler_state->image_handle->bind();
 				}
-				else if (sampler_state->external_subresource_desc.external_handle)
+				else if (sampler_state->external_subresource_desc.external_handle &&
+					(tmp_view = m_gl_texture_cache.create_temporary_subresource(unused, sampler_state->external_subresource_desc)))
 				{
-					void *unused = nullptr;
-					glBindTexture(target, m_gl_texture_cache.create_temporary_subresource(unused, sampler_state->external_subresource_desc));
+					tmp_view->bind();
 				}
 				else
 				{
+					auto target = gl::get_target(sampler_state->image_type);
 					glBindTexture(target, m_null_textures[target]->id());
 				}
 			}
@@ -447,12 +449,12 @@ void GLGSRender::end()
 
 			if (sampler_state->image_handle)
 			{
-				glBindTexture(GL_TEXTURE_2D, sampler_state->image_handle);
+				sampler_state->image_handle->bind();
 			}
 			else if (sampler_state->external_subresource_desc.external_handle)
 			{
 				void *unused = nullptr;
-				glBindTexture(GL_TEXTURE_2D, m_gl_texture_cache.create_temporary_subresource(unused, sampler_state->external_subresource_desc));
+				m_gl_texture_cache.create_temporary_subresource(unused, sampler_state->external_subresource_desc)->bind();
 			}
 			else
 			{
@@ -660,20 +662,16 @@ void GLGSRender::on_init_thread()
 
 	//Array stream buffer
 	{
-		auto &tex = m_gl_persistent_stream_buffer;
-		tex.create();
-		tex.set_target(gl::texture::target::textureBuffer);
+		m_gl_persistent_stream_buffer = std::make_unique<gl::texture>(GL_TEXTURE_BUFFER, 0, 0, 0, 0, GL_R8UI);
 		glActiveTexture(GL_TEXTURE0 + texture_index_offset);
-		tex.bind();
+		glBindTexture(GL_TEXTURE_BUFFER, m_gl_persistent_stream_buffer->id());
 	}
 
 	//Register stream buffer
 	{
-		auto &tex = m_gl_volatile_stream_buffer;
-		tex.create();
-		tex.set_target(gl::texture::target::textureBuffer);
+		m_gl_volatile_stream_buffer = std::make_unique<gl::texture>(GL_TEXTURE_BUFFER, 0, 0, 0, 0, GL_R8UI);
 		glActiveTexture(GL_TEXTURE0 + texture_index_offset + 1);
-		tex.bind();
+		glBindTexture(GL_TEXTURE_BUFFER, m_gl_volatile_stream_buffer->id());
 	}
 
 	//Fallback null texture instead of relying on texture0
@@ -681,28 +679,20 @@ void GLGSRender::on_init_thread()
 		std::vector<u32> pixeldata = {0, 0, 0, 0};
 
 		//1D
-		auto tex1D = std::make_unique<gl::texture>();
-		tex1D->create();
-		tex1D->set_target(gl::texture::target::texture1D);
-		tex1D->config().width(1).min_lod(0.f).max_lod(0.f).pixels(pixeldata.data()).apply();
+		auto tex1D = std::make_unique<gl::texture>(GL_TEXTURE_1D, 1, 1, 1, 1, GL_RGBA8);
+		tex1D->copy_from(pixeldata.data(), gl::texture::format::rgba, gl::texture::type::uint_8_8_8_8);
 
 		//2D
-		auto tex2D = std::make_unique<gl::texture>();
-		tex2D->create();
-		tex2D->set_target(gl::texture::target::texture2D);
-		tex2D->config().width(1).height(1).min_lod(0.f).max_lod(0.f).pixels(pixeldata.data()).apply();
+		auto tex2D = std::make_unique<gl::texture>(GL_TEXTURE_2D, 1, 1, 1, 1, GL_RGBA8);
+		tex2D->copy_from(pixeldata.data(), gl::texture::format::rgba, gl::texture::type::uint_8_8_8_8);
 
 		//3D
-		auto tex3D = std::make_unique<gl::texture>();
-		tex3D->create();
-		tex3D->set_target(gl::texture::target::texture3D);
-		tex3D->config().width(1).height(1).depth(1).min_lod(0.f).max_lod(0.f).pixels(pixeldata.data()).apply();
+		auto tex3D = std::make_unique<gl::texture>(GL_TEXTURE_3D, 1, 1, 1, 1, GL_RGBA8);
+		tex3D->copy_from(pixeldata.data(), gl::texture::format::rgba, gl::texture::type::uint_8_8_8_8);
 
 		//CUBE
-		auto texCUBE = std::make_unique<gl::texture>();
-		texCUBE->create();
-		texCUBE->set_target(gl::texture::target::textureCUBE);
-		texCUBE->config().width(1).height(1).depth(1).min_lod(0.f).max_lod(0.f).pixels(pixeldata.data()).apply();
+		auto texCUBE = std::make_unique<gl::texture>(GL_TEXTURE_CUBE_MAP, 1, 1, 1, 1, GL_RGBA8);
+		texCUBE->copy_from(pixeldata.data(), gl::texture::format::rgba, gl::texture::type::uint_8_8_8_8);
 
 		m_null_textures[GL_TEXTURE_1D] = std::move(tex1D);
 		m_null_textures[GL_TEXTURE_2D] = std::move(tex2D);
@@ -745,8 +735,8 @@ void GLGSRender::on_init_thread()
 
 	m_persistent_stream_view.update(m_attrib_ring_buffer.get(), 0, std::min<u32>((u32)m_attrib_ring_buffer->size(), m_max_texbuffer_size));
 	m_volatile_stream_view.update(m_attrib_ring_buffer.get(), 0, std::min<u32>((u32)m_attrib_ring_buffer->size(), m_max_texbuffer_size));
-	m_gl_persistent_stream_buffer.copy_from(m_persistent_stream_view);
-	m_gl_volatile_stream_buffer.copy_from(m_volatile_stream_view);
+	m_gl_persistent_stream_buffer->copy_from(m_persistent_stream_view);
+	m_gl_volatile_stream_buffer->copy_from(m_volatile_stream_view);
 
 	m_vao.element_array_buffer = *m_index_ring_buffer;
 
@@ -871,7 +861,7 @@ void GLGSRender::on_exit()
 
 	if (m_flip_tex_color)
 	{
-		m_flip_tex_color.remove();
+		m_flip_tex_color.reset();
 	}
 
 	if (m_vao)
@@ -879,17 +869,12 @@ void GLGSRender::on_exit()
 		m_vao.remove();
 	}
 
-	m_gl_persistent_stream_buffer.remove();
-	m_gl_volatile_stream_buffer.remove();
+	m_gl_persistent_stream_buffer.reset();
+	m_gl_volatile_stream_buffer.reset();
 
 	for (auto &sampler : m_gl_sampler_states)
 	{
 		sampler.remove();
-	}
-
-	for (auto &tex : m_null_textures)
-	{
-		tex.second->remove();
 	}
 
 	if (m_attrib_ring_buffer)
@@ -917,6 +902,7 @@ void GLGSRender::on_exit()
 		m_index_ring_buffer->remove();
 	}
 
+	m_null_textures.clear();
 	m_text_printer.close();
 	m_gl_texture_cache.destroy();
 	m_depth_converter.destroy();
@@ -976,25 +962,45 @@ void GLGSRender::clear_surface(u32 arg)
 		mask |= GLenum(gl::buffers::stencil);
 	}
 
-	if (arg & 0xf0)
+	if (auto colormask = (arg & 0xf0))
 	{
-		u8 clear_a = rsx::method_registers.clear_color_a();
-		u8 clear_r = rsx::method_registers.clear_color_r();
-		u8 clear_g = rsx::method_registers.clear_color_g();
-		u8 clear_b = rsx::method_registers.clear_color_b();
-
-		gl_state.color_mask(arg & 0xf0);
-		gl_state.clear_color(clear_r, clear_g, clear_b, clear_a);
-
-		mask |= GLenum(gl::buffers::color);
-
-		for (auto &rtt : m_rtts.m_bound_render_targets)
+		switch (rsx::method_registers.surface_color())
 		{
-			if (std::get<0>(rtt) != 0)
+		case rsx::surface_color_format::x32:
+		case rsx::surface_color_format::w16z16y16x16:
+		case rsx::surface_color_format::w32z32y32x32:
+		{
+			//Nop
+			break;
+		}
+		case rsx::surface_color_format::g8b8:
+		{
+			colormask = rsx::get_g8b8_r8g8_colormask(colormask);
+			// Fall through
+		}
+		default:
+		{
+			u8 clear_a = rsx::method_registers.clear_color_a();
+			u8 clear_r = rsx::method_registers.clear_color_r();
+			u8 clear_g = rsx::method_registers.clear_color_g();
+			u8 clear_b = rsx::method_registers.clear_color_b();
+
+			gl_state.color_mask(colormask);
+			gl_state.clear_color(clear_r, clear_g, clear_b, clear_a);
+
+			mask |= GLenum(gl::buffers::color);
+
+			for (auto &rtt : m_rtts.m_bound_render_targets)
 			{
-				std::get<1>(rtt)->set_cleared(true);
-				std::get<1>(rtt)->old_contents = nullptr;
+				if (std::get<0>(rtt) != 0)
+				{
+					std::get<1>(rtt)->set_cleared(true);
+					std::get<1>(rtt)->old_contents = nullptr;
+				}
 			}
+
+			break;
+		}
 		}
 	}
 
@@ -1153,6 +1159,12 @@ void GLGSRender::update_draw_state()
 	bool color_mask_r = rsx::method_registers.color_mask_r();
 	bool color_mask_a = rsx::method_registers.color_mask_a();
 
+	if (rsx::method_registers.surface_color() == rsx::surface_color_format::g8b8)
+	{
+		//Map GB components onto RG
+		rsx::get_g8b8_r8g8_colormask(color_mask_r, color_mask_g, color_mask_b, color_mask_a);
+	}
+
 	gl_state.color_mask(color_mask_r, color_mask_g, color_mask_b, color_mask_a);
 	gl_state.depth_mask(rsx::method_registers.depth_write_enabled());
 	gl_state.stencil_mask(rsx::method_registers.stencil_mask());
@@ -1306,7 +1318,7 @@ void GLGSRender::flip(int buffer)
 	u32 buffer_height = display_buffers[buffer].height;
 	u32 buffer_pitch = display_buffers[buffer].pitch;
 
-	if ((u32)buffer < display_buffers_count && buffer_width && buffer_height)
+	if ((u32)buffer < display_buffers_count && buffer_width && buffer_height && buffer_pitch)
 	{
 		// Calculate blit coordinates
 		coordi aspect_ratio;
@@ -1344,49 +1356,39 @@ void GLGSRender::flip(int buffer)
 			buffer_width = render_target_texture->width();
 			buffer_height = render_target_texture->height();
 
-			image = render_target_texture->get_view();
+			image = render_target_texture->raw_handle();
 		}
 		else if (auto surface = m_gl_texture_cache.find_texture_from_dimensions(absolute_address))
 		{
 			//Hack - this should be the first location to check for output
 			//The render might have been done offscreen or in software and a blit used to display
-			image = surface->get_raw_view();
-
-			//Reset color swizzle
-			glBindTexture(GL_TEXTURE_2D, image);
-			const GLenum rgba_shuffle[] = { GL_RED, GL_GREEN, GL_BLUE, GL_ALPHA };
-			glTexParameteriv(GL_TEXTURE_2D, GL_TEXTURE_SWIZZLE_RGBA, (GLint*)rgba_shuffle);
-			surface->set_sampler_status(rsx::texture_sampler_status::status_uninitialized);
+			image = surface->get_raw_texture()->id();
 		}
 		else
 		{
 			LOG_WARNING(RSX, "Flip texture was not found in cache. Uploading surface from CPU");
 
 			if (!buffer_pitch) buffer_pitch = buffer_width * 4;
-			if (!m_flip_tex_color || m_flip_tex_color.size() != sizei{ (int)buffer_width, (int)buffer_height })
+			gl::pixel_unpack_settings unpack_settings;
+			unpack_settings.aligment(1).row_length(buffer_pitch / 4);
+
+			if (!m_flip_tex_color || m_flip_tex_color->size2D() != sizei{ (int)buffer_width, (int)buffer_height })
 			{
-				m_flip_tex_color.recreate(gl::texture::target::texture2D);
-
-				m_flip_tex_color.config()
-					.size({ (int)buffer_width, (int)buffer_height })
-					.type(gl::texture::type::uint_8_8_8_8)
-					.format(gl::texture::format::bgra);
-
-				m_flip_tex_color.pixel_unpack_settings().aligment(1).row_length(buffer_pitch / 4);
+				m_flip_tex_color.reset(new gl::texture(GL_TEXTURE_2D, buffer_width, buffer_height, 1, 1, GL_RGBA8));
 			}
 
 			if (buffer_region.tile)
 			{
 				std::unique_ptr<u8[]> temp(new u8[buffer_height * buffer_pitch]);
 				buffer_region.read(temp.get(), buffer_width, buffer_height, buffer_pitch);
-				m_flip_tex_color.copy_from(temp.get(), gl::texture::format::bgra, gl::texture::type::uint_8_8_8_8);
+				m_flip_tex_color->copy_from(temp.get(), gl::texture::format::bgra, gl::texture::type::uint_8_8_8_8, unpack_settings);
 			}
 			else
 			{
-				m_flip_tex_color.copy_from(buffer_region.ptr, gl::texture::format::bgra, gl::texture::type::uint_8_8_8_8);
+				m_flip_tex_color->copy_from(buffer_region.ptr, gl::texture::format::bgra, gl::texture::type::uint_8_8_8_8, unpack_settings);
 			}
 
-			image = m_flip_tex_color.id();
+			image = m_flip_tex_color->id();
 		}
 
 		areai screen_area = coordi({}, { (int)buffer_width, (int)buffer_height });

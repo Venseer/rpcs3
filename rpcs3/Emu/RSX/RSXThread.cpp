@@ -500,7 +500,7 @@ namespace rsx
 			}
 
 			//Execute backend-local tasks first
-			do_local_task(ctrl->put.load() == internal_get.load());
+			do_local_task(performance_counters.FIFO_is_idle);
 
 			//Update sub-units
 			zcull_ctrl->update(this);
@@ -520,6 +520,18 @@ namespace rsx
 
 				sync_point_request = false;
 			}
+			else if (performance_counters.FIFO_is_idle)
+			{
+				//Registers not updated, do housekeeping since queue is idle
+				if (has_deferred_call)
+				{
+					flush_command_queue();
+				}
+				else
+				{
+					do_internal_task();
+				}
+			}
 
 			//Now load the FIFO ctrl registers
 			ctrl->get.store(internal_get.load());
@@ -527,28 +539,13 @@ namespace rsx
 
 			if (put == internal_get || !Emu.IsRunning())
 			{
-				if (has_deferred_call)
-				{
-					flush_command_queue();
-				}
-				else if (!performance_counters.FIFO_is_idle)
+				if (!performance_counters.FIFO_is_idle)
 				{
 					performance_counters.FIFO_idle_timestamp = get_system_time();
 					performance_counters.FIFO_is_idle = true;
 				}
-				else
-				{
-					do_internal_task();
-				}
 
 				continue;
-			}
-
-			if (performance_counters.FIFO_is_idle)
-			{
-				//Update performance counters with time spent in idle mode
-				performance_counters.FIFO_is_idle = false;
-				performance_counters.idle_time += (get_system_time() - performance_counters.FIFO_idle_timestamp);
 			}
 
 			//Validate put and get registers
@@ -580,6 +577,16 @@ namespace rsx
 			if ((cmd & RSX_METHOD_OLD_JUMP_CMD_MASK) == RSX_METHOD_OLD_JUMP_CMD)
 			{
 				u32 offs = cmd & 0x1ffffffc;
+				if (offs == internal_get.load())
+				{
+					//Jump to self
+					if (!performance_counters.FIFO_is_idle)
+					{
+						performance_counters.FIFO_idle_timestamp = get_system_time();
+						performance_counters.FIFO_is_idle = true;
+					}
+				}
+
 				//LOG_WARNING(RSX, "rsx jump(0x%x) #addr=0x%x, cmd=0x%x, get=0x%x, put=0x%x", offs, m_ioAddress + get, cmd, get, put);
 				internal_get = offs;
 				continue;
@@ -587,6 +594,16 @@ namespace rsx
 			if ((cmd & RSX_METHOD_NEW_JUMP_CMD_MASK) == RSX_METHOD_NEW_JUMP_CMD)
 			{
 				u32 offs = cmd & 0xfffffffc;
+				if (offs == internal_get.load())
+				{
+					//Jump to self
+					if (!performance_counters.FIFO_is_idle)
+					{
+						performance_counters.FIFO_idle_timestamp = get_system_time();
+						performance_counters.FIFO_is_idle = true;
+					}
+				}
+
 				//LOG_WARNING(RSX, "rsx jump(0x%x) #addr=0x%x, cmd=0x%x, get=0x%x, put=0x%x", offs, m_ioAddress + get, cmd, get, put);
 				internal_get = offs;
 				continue;
@@ -616,6 +633,12 @@ namespace rsx
 			}
 			if (cmd == 0) //nop
 			{
+				if (!performance_counters.FIFO_is_idle)
+				{
+					performance_counters.FIFO_idle_timestamp = get_system_time();
+					performance_counters.FIFO_is_idle = true;
+				}
+
 				internal_get += 4;
 				continue;
 			}
@@ -661,6 +684,13 @@ namespace rsx
 			// so logging it until its reported
 			if (internal_get < put && ((internal_get + (count + 1) * 4) > put))
 				LOG_ERROR(RSX, "Get pointer jumping over put pointer! This is bad!");
+
+			if (performance_counters.FIFO_is_idle)
+			{
+				//Update performance counters with time spent in idle mode
+				performance_counters.FIFO_is_idle = false;
+				performance_counters.idle_time += (get_system_time() - performance_counters.FIFO_idle_timestamp);
+			}
 
 			for (u32 i = 0; i < count; i++)
 			{
@@ -1564,8 +1594,8 @@ namespace rsx
 					{
 					case CELL_GCM_TEXTURE_A8R8G8B8:
 					case CELL_GCM_TEXTURE_D8R8G8B8:
-					case CELL_GCM_TEXTURE_A4R4G4B4:
-					case CELL_GCM_TEXTURE_R5G6B5:
+					case CELL_GCM_TEXTURE_A4R4G4B4: //TODO
+					case CELL_GCM_TEXTURE_R5G6B5:   //TODO
 					{
 						u32 remap = tex.remap();
 						result.redirected_textures |= (1 << i);
@@ -1573,8 +1603,9 @@ namespace rsx
 						break;
 					}
 					case CELL_GCM_TEXTURE_DEPTH16:
-					case CELL_GCM_TEXTURE_DEPTH24_D8:
 					case CELL_GCM_TEXTURE_DEPTH16_FLOAT:
+					case CELL_GCM_TEXTURE_DEPTH24_D8:
+					case CELL_GCM_TEXTURE_DEPTH24_D8_FLOAT:
 					{
 						const auto compare_mode = (rsx::comparison_function)tex.zfunc();
 						if (result.textures_alpha_kill[i] == 0 &&
@@ -1731,8 +1762,9 @@ namespace rsx
 							break;
 						}
 						case CELL_GCM_TEXTURE_DEPTH16:
-						case CELL_GCM_TEXTURE_DEPTH24_D8:
 						case CELL_GCM_TEXTURE_DEPTH16_FLOAT:
+						case CELL_GCM_TEXTURE_DEPTH24_D8:
+						case CELL_GCM_TEXTURE_DEPTH24_D8_FLOAT:
 						{
 							const auto compare_mode = (rsx::comparison_function)tex.zfunc();
 							if (result.textures_alpha_kill[i] == 0 &&

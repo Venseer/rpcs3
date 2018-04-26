@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../System.h"
+#include "Utilities/geometry.h"
 #include "gcm_enums.h"
 #include <atomic>
 
@@ -58,6 +59,47 @@ namespace rsx
 		u8 aspect = 0; //AUTO
 		u32 scanline_pitch = 0; //PACKED
 		f32 gamma = 1.f; //NO GAMMA CORRECTION
+	};
+
+	struct blit_src_info
+	{
+		blit_engine::transfer_source_format format;
+		blit_engine::transfer_origin origin;
+		u16 offset_x;
+		u16 offset_y;
+		u16 width;
+		u16 height;
+		u16 slice_h;
+		u16 pitch;
+		void *pixels;
+
+		bool compressed_x;
+		bool compressed_y;
+		u32 rsx_address;
+	};
+
+	struct blit_dst_info
+	{
+		blit_engine::transfer_destination_format format;
+		u16 offset_x;
+		u16 offset_y;
+		u16 width;
+		u16 height;
+		u16 pitch;
+		u16 clip_x;
+		u16 clip_y;
+		u16 clip_width;
+		u16 clip_height;
+		u16 max_tile_h;
+		f32 scale_x;
+		f32 scale_y;
+
+		bool swizzled;
+		void *pixels;
+
+		bool compressed_x;
+		bool compressed_y;
+		u32  rsx_address;
 	};
 
 	static const std::pair<std::array<u8, 4>, std::array<u8, 4>> default_remap_vector =
@@ -237,6 +279,7 @@ namespace rsx
 
 	void convert_le_f32_to_be_d24(void *dst, void *src, u32 row_length_in_texels, u32 num_rows);
 	void convert_le_d24x8_to_be_d24x8(void *dst, void *src, u32 row_length_in_texels, u32 num_rows);
+	void convert_le_d24x8_to_le_f32(void *dst, void *src, u32 row_length_in_texels, u32 num_rows);
 
 	void fill_scale_offset_matrix(void *dest_, bool transpose,
 		float offset_x, float offset_y, float offset_z,
@@ -411,4 +454,31 @@ namespace rsx
 		return ((u64)index + index_base) & 0x000FFFFF;
 	}
 
+	// Convert color write mask for G8B8 to R8G8
+	static inline u32 get_g8b8_r8g8_colormask(u32 mask)
+	{
+		u32 result = 0;
+		if (mask & 0x20) result |= 0x20;
+		if (mask & 0x40) result |= 0x10;
+
+		return result;
+	}
+
+	static inline void get_g8b8_r8g8_colormask(bool &red, bool &green, bool &blue, bool &alpha)
+	{
+		red = blue;
+		green = green;
+		blue = false;
+		alpha = false;
+	}
+
+	static inline color4f decode_border_color(u32 colorref)
+	{
+		color4f result;
+		result.b = (colorref & 0xFF) / 255.f;
+		result.g = ((colorref >> 8) & 0xFF) / 255.f;
+		result.r = ((colorref >> 16) & 0xFF) / 255.f;
+		result.a = ((colorref >> 24) & 0xFF) / 255.f;
+		return result;
+	}
 }

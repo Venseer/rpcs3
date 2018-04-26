@@ -254,9 +254,6 @@ private:
 	vk::texture_cache m_texture_cache;
 	rsx::vk_render_targets m_rtts;
 
-	vk::gpu_formats_support m_optimal_tiling_supported_formats;
-	vk::memory_type_mapping m_memory_type_mapping;
-
 	std::unique_ptr<vk::buffer> null_buffer;
 	std::unique_ptr<vk::buffer_view> null_buffer_view;
 
@@ -264,6 +261,7 @@ private:
 	std::unique_ptr<vk::depth_convert_pass> m_depth_converter;
 	std::unique_ptr<vk::depth_scaling_pass> m_depth_scaler;
 	std::unique_ptr<vk::ui_overlay_renderer> m_ui_renderer;
+	std::unique_ptr<vk::attachment_clear_pass> m_attachment_clear_pass;
 
 	shared_mutex m_sampler_mutex;
 	u64 surface_store_tag = 0;
