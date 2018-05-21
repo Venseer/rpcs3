@@ -213,7 +213,7 @@ namespace spu
 	}
 }
 
-const auto spu_putllc_tx = build_function_asm<int(*)(u32 raddr, u64 rtime, const void* _old, const void* _new)>([](asmjit::X86Assembler& c, auto& args)
+const auto spu_putllc_tx = build_function_asm<bool(*)(u32 raddr, u64 rtime, const void* _old, const void* _new)>([](asmjit::X86Assembler& c, auto& args)
 {
 	using namespace asmjit;
 
@@ -228,21 +228,17 @@ const auto spu_putllc_tx = build_function_asm<int(*)(u32 raddr, u64 rtime, const
 	c.lea(x86::r11, x86::qword_ptr(x86::r11, args[0]));
 	c.shr(args[0], 4);
 	c.lea(x86::r10, x86::qword_ptr(x86::r10, args[0]));
+	c.mov(args[0].r32(), 3);
 
-	// Touch memory (heavyweight)
-	c.mov(x86::eax, x86::dword_ptr(args[2]));
-	c.mov(x86::eax, x86::dword_ptr(args[3]));
-	c.lock().add(x86::qword_ptr(x86::r11), 0);
-	c.xor_(x86::eax, x86::eax);
-	c.lock().xadd(x86::qword_ptr(x86::r10), x86::rax);
-	c.cmp(x86::rax, args[1]);
-	c.jne(fail);
-
+	// Prepare data (Windows has only 6 volatile vector registers)
 	c.vmovups(x86::ymm0, x86::yword_ptr(args[2], 0));
 	c.vmovups(x86::ymm1, x86::yword_ptr(args[2], 32));
 	c.vmovups(x86::ymm2, x86::yword_ptr(args[2], 64));
 	c.vmovups(x86::ymm3, x86::yword_ptr(args[2], 96));
-#ifndef _WIN32
+#ifdef _WIN32
+	c.vmovups(x86::ymm4, x86::yword_ptr(args[3], 0));
+	c.vmovups(x86::ymm5, x86::yword_ptr(args[3], 96));
+#else
 	c.vmovups(x86::ymm6, x86::yword_ptr(args[3], 0));
 	c.vmovups(x86::ymm7, x86::yword_ptr(args[3], 32));
 	c.vmovups(x86::ymm8, x86::yword_ptr(args[3], 64));
@@ -250,7 +246,7 @@ const auto spu_putllc_tx = build_function_asm<int(*)(u32 raddr, u64 rtime, const
 #endif
 
 	// Begin transaction
-	build_transaction_enter(c, fall);
+	Label begin = build_transaction_enter(c, fall);
 	c.cmp(x86::qword_ptr(x86::r10), args[1]);
 	c.jne(fail);
 	c.vxorps(x86::ymm0, x86::ymm0, x86::yword_ptr(x86::r11, 0));
@@ -263,41 +259,45 @@ const auto spu_putllc_tx = build_function_asm<int(*)(u32 raddr, u64 rtime, const
 	c.vptest(x86::ymm0, x86::ymm0);
 	c.jnz(fail);
 #ifdef _WIN32
-	c.vmovups(x86::ymm0, x86::yword_ptr(args[3], 0));
-	c.vmovaps(x86::yword_ptr(x86::r11, 0), x86::ymm0);
-	c.vmovups(x86::ymm1, x86::yword_ptr(args[3], 32));
-	c.vmovaps(x86::yword_ptr(x86::r11, 32), x86::ymm1);
-	c.vmovups(x86::ymm2, x86::yword_ptr(args[3], 64));
-	c.vmovaps(x86::yword_ptr(x86::r11, 64), x86::ymm2);
-	c.vmovups(x86::ymm3, x86::yword_ptr(args[3], 96));
-	c.vmovaps(x86::yword_ptr(x86::r11, 96), x86::ymm3);
+	c.vmovups(x86::ymm2, x86::yword_ptr(args[3], 32));
+	c.vmovups(x86::ymm3, x86::yword_ptr(args[3], 64));
+	c.vmovaps(x86::yword_ptr(x86::r11, 0), x86::ymm4);
+	c.vmovaps(x86::yword_ptr(x86::r11, 32), x86::ymm2);
+	c.vmovaps(x86::yword_ptr(x86::r11, 64), x86::ymm3);
+	c.vmovaps(x86::yword_ptr(x86::r11, 96), x86::ymm5);
 #else
 	c.vmovaps(x86::yword_ptr(x86::r11, 0), x86::ymm6);
 	c.vmovaps(x86::yword_ptr(x86::r11, 32), x86::ymm7);
 	c.vmovaps(x86::yword_ptr(x86::r11, 64), x86::ymm8);
 	c.vmovaps(x86::yword_ptr(x86::r11, 96), x86::ymm9);
 #endif
-	c.rdtsc(); // destroys args[1] or args[2]
-	c.shl(x86::rdx, 33);
-	c.shl(x86::rax, 1);
-	c.or_(x86::rax, x86::rdx);
-	c.mov(x86::qword_ptr(x86::r10), x86::rax);
+	c.add(x86::qword_ptr(x86::r10), 1);
 	c.xend();
 	c.vzeroupper();
 	c.mov(x86::eax, 1);
 	c.ret();
 
+	// Touch memory after transaction failure
 	c.bind(fall);
+	c.sub(args[0].r32(), 1);
+	c.jz(fail);
 	c.sar(x86::eax, 24);
-	c.ret();
+	c.js(fail);
+	c.lock().add(x86::qword_ptr(x86::r11), 0);
+	c.lock().add(x86::qword_ptr(x86::r10), 0);
+#ifdef _WIN32
+	c.vmovups(x86::ymm4, x86::yword_ptr(args[3], 0));
+	c.vmovups(x86::ymm5, x86::yword_ptr(args[3], 96));
+#endif
+	c.jmp(begin);
 
 	c.bind(fail);
 	build_transaction_abort(c, 0xff);
-	c.or_(x86::eax, -1);
+	c.xor_(x86::eax, x86::eax);
 	c.ret();
 });
 
-const auto spu_getll_tx = build_function_asm<u64(*)(u32 raddr, void* rdata)>([](asmjit::X86Assembler& c, auto& args)
+const auto spu_getll_tx = build_function_asm<u64(*)(u32 raddr, void* rdata, u64* out_rtime)>([](asmjit::X86Assembler& c, auto& args)
 {
 	using namespace asmjit;
 
@@ -311,13 +311,10 @@ const auto spu_getll_tx = build_function_asm<u64(*)(u32 raddr, void* rdata)>([](
 	c.lea(x86::r11, x86::qword_ptr(x86::r11, args[0]));
 	c.shr(args[0], 4);
 	c.lea(x86::r10, x86::qword_ptr(x86::r10, args[0]));
-
-	// Touch memory
-	c.mov(x86::rax, x86::qword_ptr(x86::r11));
-	c.mov(x86::rax, x86::qword_ptr(x86::r10));
+	c.mov(args[0].r32(), 1);
 
 	// Begin transaction
-	build_transaction_enter(c, fall);
+	Label begin = build_transaction_enter(c, fall);
 	c.mov(x86::rax, x86::qword_ptr(x86::r10));
 	c.vmovaps(x86::ymm0, x86::yword_ptr(x86::r11, 0));
 	c.vmovaps(x86::ymm1, x86::yword_ptr(x86::r11, 32));
@@ -329,14 +326,20 @@ const auto spu_getll_tx = build_function_asm<u64(*)(u32 raddr, void* rdata)>([](
 	c.vmovups(x86::yword_ptr(args[1], 64), x86::ymm2);
 	c.vmovups(x86::yword_ptr(args[1], 96), x86::ymm3);
 	c.vzeroupper();
+	c.mov(x86::qword_ptr(args[2]), x86::rax);
+	c.mov(x86::rax, args[0]);
 	c.ret();
 
+	// Touch memory after transaction failure
 	c.bind(fall);
-	c.mov(x86::eax, 1);
-	c.ret();
+	c.pause();
+	c.mov(x86::rax, x86::qword_ptr(x86::r11));
+	c.mov(x86::rax, x86::qword_ptr(x86::r10));
+	c.add(args[0], 1);
+	c.jmp(begin);
 });
 
-const auto spu_putlluc_tx = build_function_asm<bool(*)(u32 raddr, const void* rdata)>([](asmjit::X86Assembler& c, auto& args)
+const auto spu_putlluc_tx = build_function_asm<u64(*)(u32 raddr, const void* rdata)>([](asmjit::X86Assembler& c, auto& args)
 {
 	using namespace asmjit;
 
@@ -350,10 +353,7 @@ const auto spu_putlluc_tx = build_function_asm<bool(*)(u32 raddr, const void* rd
 	c.lea(x86::r11, x86::qword_ptr(x86::r11, args[0]));
 	c.shr(args[0], 4);
 	c.lea(x86::r10, x86::qword_ptr(x86::r10, args[0]));
-
-	// Touch memory (heavyweight)
-	c.lock().add(x86::qword_ptr(x86::r11), 0);
-	c.lock().add(x86::qword_ptr(x86::r10), 0);
+	c.mov(args[0].r32(), 1);
 
 	// Prepare data
 	c.vmovups(x86::ymm0, x86::yword_ptr(args[1], 0));
@@ -362,24 +362,24 @@ const auto spu_putlluc_tx = build_function_asm<bool(*)(u32 raddr, const void* rd
 	c.vmovups(x86::ymm3, x86::yword_ptr(args[1], 96));
 
 	// Begin transaction
-	build_transaction_enter(c, fall);
+	Label begin = build_transaction_enter(c, fall);
 	c.vmovaps(x86::yword_ptr(x86::r11, 0), x86::ymm0);
 	c.vmovaps(x86::yword_ptr(x86::r11, 32), x86::ymm1);
 	c.vmovaps(x86::yword_ptr(x86::r11, 64), x86::ymm2);
 	c.vmovaps(x86::yword_ptr(x86::r11, 96), x86::ymm3);
-	c.rdtsc(); // destroys args[1] or args[2]
-	c.shl(x86::rdx, 33);
-	c.shl(x86::rax, 1);
-	c.or_(x86::rax, x86::rdx);
-	c.mov(x86::qword_ptr(x86::r10), x86::rax);
+	c.add(x86::qword_ptr(x86::r10), 1);
 	c.xend();
 	c.vzeroupper();
-	c.mov(x86::eax, 1);
+	c.mov(x86::rax, args[0]);
 	c.ret();
 
+	// Touch memory after transaction failure
 	c.bind(fall);
-	c.xor_(x86::eax, x86::eax);
-	c.ret();
+	c.pause();
+	c.lock().add(x86::qword_ptr(x86::r11), 0);
+	c.lock().add(x86::qword_ptr(x86::r10), 0);
+	c.add(args[0], 1);
+	c.jmp(begin);
 });
 
 void spu_int_ctrl_t::set(u64 ints)
@@ -498,8 +498,8 @@ std::string SPUThread::dump() const
 	std::string ret = cpu_thread::dump();
 
 	// Print some transaction statistics
-	fmt::append(ret, "\nTX: %u; Fail: %u (0x%x)", tx_success, tx_failure, tx_status);
 	fmt::append(ret, "\nBlocks: %u; Fail: %u", block_counter, block_failure);
+	fmt::append(ret, "\n[%s]", ch_mfc_cmd);
 	fmt::append(ret, "\nTag Mask: 0x%08x", ch_tag_mask);
 	fmt::append(ret, "\nMFC Stall: 0x%08x", ch_stall_mask);
 	fmt::append(ret, "\nMFC Queue Size: %u", mfc_size);
@@ -508,9 +508,7 @@ std::string SPUThread::dump() const
 	{
 		if (i < mfc_size)
 		{
-			fmt::append(ret, "\n[%s #%02u 0x%05x:0x%08x 0x%x]",
-				mfc_queue[i].cmd, mfc_queue[i].tag, mfc_queue[i].lsa,
-				mfc_queue[i].eah * 0x100000000ull + mfc_queue[i].eal, mfc_queue[i].size);
+			fmt::append(ret, "\n%s", mfc_queue[i]);
 		}
 		else
 		{
@@ -1049,20 +1047,18 @@ void SPUThread::do_putlluc(const spu_mfc_cmd& args)
 	auto& data = vm::_ref<decltype(rdata)>(addr);
 	const auto to_write = _ref<decltype(rdata)>(args.lsa & 0x3ffff);
 
-	vm::reservation_acquire(addr, 128);
-
 	// Store unconditionally
-	while (g_use_rtm)
+	if (g_use_rtm)
 	{
-		if (spu_putlluc_tx(addr, to_write.data()))
+		const u64 count = spu_putlluc_tx(addr, to_write.data());
+
+		if (count > 5)
 		{
-			vm::reservation_notifier(addr, 128).notify_all();
-			tx_success++;
-			return;
+			LOG_ERROR(SPU, "%s took too long: %u", args.cmd, count);
 		}
 
-		busy_wait(300);
-		tx_failure++;
+		vm::reservation_notifier(addr, 128).notify_all();
+		return;
 	}
 
 	vm::writer_lock lock(0);
@@ -1255,19 +1251,14 @@ bool SPUThread::process_mfc_cmd(spu_mfc_cmd args)
 			}
 		}
 
-		while (g_use_rtm)
+		if (g_use_rtm)
 		{
-			rtime = spu_getll_tx(raddr, rdata.data());
+			const u64 count = spu_getll_tx(raddr, rdata.data(), &rtime);
 
-			if (rtime & 1)
+			if (count > 9)
 			{
-				tx_failure++;
-				busy_wait(300);
-				continue;
+				LOG_ERROR(SPU, "%s took too long: %u", args.cmd, count);
 			}
-
-			tx_success++;
-			break;
 		}
 
 		// Do several attemps
@@ -1319,28 +1310,13 @@ bool SPUThread::process_mfc_cmd(spu_mfc_cmd args)
 		{
 			if (g_use_rtm)
 			{
-				// Do several attempts (TODO)
-				for (u32 i = 0;; i++)
+				if (spu_putllc_tx(raddr, rtime, rdata.data(), to_write.data()))
 				{
-					const int r = spu_putllc_tx(raddr, rtime, rdata.data(), to_write.data());
-
-					if (r > 0)
-					{
-						vm::reservation_notifier(raddr, 128).notify_all();
-						result = true;
-						tx_success++;
-						break;
-					}
-
-					if (r < 0)
-					{
-						// Reservation lost
-						break;
-					}
-
-					// Don't fallback to heavyweight lock, just give up
-					tx_failure++;
+					vm::reservation_notifier(raddr, 128).notify_all();
+					result = true;
 				}
+
+				// Don't fallback to heavyweight lock, just give up
 			}
 			else if (rdata == data)
 			{
@@ -1761,12 +1737,15 @@ s64 SPUThread::get_ch_value(u32 ch)
 
 		if (mask1 & SPU_EVENT_LR && raddr)
 		{
-			if (mask1 != SPU_EVENT_LR)
+			if (mask1 != SPU_EVENT_LR && mask1 != SPU_EVENT_LR + SPU_EVENT_TM)
 			{
+				// Combining LR with other flags needs another solution
 				fmt::throw_exception("Not supported: event mask 0x%x" HERE, mask1);
 			}
 
-			std::shared_lock<notifier> pseudo_lock(vm::reservation_notifier(raddr, 128));
+			std::shared_lock<notifier> pseudo_lock(vm::reservation_notifier(raddr, 128), std::try_to_lock);
+
+			verify(HERE), pseudo_lock;
 
 			while (res = get_events(), !res)
 			{

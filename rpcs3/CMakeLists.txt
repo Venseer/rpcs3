@@ -107,7 +107,11 @@ if(USE_NATIVE_INSTRUCTIONS)
 endif()
 
 if(NOT MSVC)
-	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-invalid-pch -Wno-unused-command-line-argument -fexceptions")
+	set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-invalid-pch -fexceptions")
+	if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wno-unused-command-line-argument")
+	endif()
+
 	# This hides our LLVM from mesa's LLVM, otherwise we get some unresolvable conflicts.
 	if(NOT APPLE)
 		set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -Wl,--exclude-libs,ALL")
@@ -124,7 +128,7 @@ if(NOT MSVC)
 
 	add_compile_options(-msse -msse2 -mcx16)
 
-	if("${CMAKE_CXX_COMPILER_ID}" STREQUAL "Clang")
+	if(CMAKE_CXX_COMPILER_ID MATCHES "Clang")
 		# This fixes 'some' of the st11range issues. See issue #2516
 		if(APPLE)
 			set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -Wl,-image_base,0x10000 -Wl,-pagezero_size,0x10000")
@@ -165,7 +169,6 @@ elseif(NOT MSVC AND NOT CMAKE_CXX_FLAGS MATCHES "LIBICONV_PLUG")
 	set(ADDITIONAL_LIBS ${ADDITIONAL_LIBS} "iconv")
 endif()
 if(UNIX AND NOT APPLE)
-	set(ADDITIONAL_LIBS ${ADDITIONAL_LIBS} "X11")
 	find_package(Wayland)
 	if (WAYLAND_FOUND)
 		include_directories(${WAYLAND_INCLUDE_DIR})
@@ -223,7 +226,6 @@ else()
 	option(USE_ALSA "ALSA audio backend" ON)
 	option(USE_PULSE "PulseAudio audio backend" ON)
 	option(USE_LIBEVDEV "libevdev-based joystick support" ON)
-	option(USE_VULKAN "Vulkan render backend" ON)
 endif()
 
 if(USE_ALSA)
@@ -252,11 +254,12 @@ if(USE_LIBEVDEV)
 		list(APPEND ADDITIONAL_LIBS ${LIBEVDEV_LDFLAGS})
 	endif()
 endif()
-if(NOT WIN32 AND USE_VULKAN)
+option(USE_VULKAN "Vulkan render backend" ON)
+if(NOT APPLE AND USE_VULKAN)
 	find_package(Vulkan)
 	if(VULKAN_FOUND)
 		add_definitions(-DHAVE_VULKAN)
-		list(APPEND ADDITIONAL_LIBS ${VULKAN_LIBRARY})
+		list(APPEND ADDITIONAL_LIBS Vulkan::Vulkan)
 		if(VULKAN_PREBUILT)
 			list(APPEND ADDITIONAL_LIBS glslang HLSL OGLCompiler SPIRV OSDependent)
 		endif()
@@ -296,7 +299,6 @@ ${LLVM_INCLUDE_DIRS}
 "${RPCS3_SRC_DIR}/../Utilities/yaml-cpp/include"
 "${RPCS3_SRC_DIR}/../asmjit/src/asmjit"
 "${RPCS3_SRC_DIR}/../3rdparty/GSL/include"
-"${RPCS3_SRC_DIR}/../Vulkan/Vulkan-LoaderAndValidationLayers/include"
 "${RPCS3_SRC_DIR}/../Vulkan/glslang/glslang/Public"
 "${RPCS3_SRC_DIR}/../Vulkan/glslang/"
 "${RPCS3_SRC_DIR}/../3rdparty/hidapi/hidapi"
@@ -328,11 +330,7 @@ else()
 	endif()
 endif()
 
-link_directories(
-"${RPCS3_SRC_DIR}/../3rdparty/minidx12/"
-"${RPCS3_SRC_DIR}/../Vulkan"
-)
-
+link_directories("${RPCS3_SRC_DIR}/../3rdparty/minidx12/")
 
 if(NOT USE_SYSTEM_FFMPEG)
 	if(MSVC OR NOT WIN32)
@@ -403,6 +401,10 @@ add_dependencies(rpcs3 GitVersion)
 if(NOT MSVC)
 	find_package(GLEW 1.13.0 REQUIRED)
 	target_link_libraries(rpcs3 GLEW::GLEW)
+
+	set(CMAKE_THREAD_PREFER_PTHREAD 1)
+	find_package(Threads REQUIRED)
+	target_link_libraries(rpcs3 Threads::Threads)
 endif()
 
 if(UNIX)
@@ -416,7 +418,7 @@ target_link_libraries(rpcs3 xxhash)
 if(WIN32)
 	target_link_libraries(rpcs3 ws2_32.lib Winmm.lib Psapi.lib gdi32.lib VKstatic.1 glslang OSDependent OGLCompiler SPIRV HLSL setupapi.lib hidapi-hid Shlwapi.lib)
 	if(NOT MSVC)
-		target_link_libraries(rpcs3 ${OPENGL_LIBRARIES} opengl32.lib glu32.lib libpthread)
+		target_link_libraries(rpcs3 ${OPENGL_LIBRARIES} opengl32.lib glu32.lib)
 	else()
 		target_link_libraries(rpcs3 dxgi.lib d2d1.lib dwrite.lib)
 	endif()
@@ -432,10 +434,7 @@ else()
 	else()
 		target_link_libraries(rpcs3 hidapi-libusb usb)
 	endif()
-	if(VULKAN_FOUND)
-		target_link_libraries(rpcs3 ${VULKAN_LIBRARIES})
-	endif()
-	target_link_libraries(rpcs3 ${CMAKE_DL_LIBS} -lpthread ZLIB::ZLIB ${ADDITIONAL_LIBS})
+	target_link_libraries(rpcs3 ${CMAKE_DL_LIBS} ZLIB::ZLIB ${ADDITIONAL_LIBS})
 	if(USE_SYSTEM_FFMPEG)
 		link_libraries(${FFMPEG_LIBRARY_DIR})
 		target_link_libraries(rpcs3 libavformat.so libavcodec.so libavutil.so libswscale.so)
