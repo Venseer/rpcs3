@@ -355,6 +355,16 @@ namespace rsx
 		if (supports_native_ui)
 		{
 			m_overlay_manager = fxm::make_always<rsx::overlays::display_manager>();
+
+			if (g_cfg.video.perf_overlay.perf_overlay_enabled)
+			{
+				auto perf_overlay = m_overlay_manager->create<rsx::overlays::perf_metrics_overlay>(false);
+
+				perf_overlay->set_detail_level(g_cfg.video.perf_overlay.level);
+				perf_overlay->set_update_interval(g_cfg.video.perf_overlay.update_interval);
+				perf_overlay->set_font_size(g_cfg.video.perf_overlay.font_size);
+				perf_overlay->init();
+			}
 		}
 
 		on_init_thread();
@@ -503,7 +513,7 @@ namespace rsx
 			}
 
 			//Execute backend-local tasks first
-			do_local_task(performance_counters.state != FIFO_state::running);
+			do_local_task(performance_counters.state);
 
 			//Update sub-units
 			zcull_ctrl->update(this);
@@ -1280,9 +1290,9 @@ namespace rsx
 		}
 	}
 
-	void thread::do_local_task(bool /*idle*/)
+	void thread::do_local_task(FIFO_state state)
 	{
-		if (!in_begin_end)
+		if (!in_begin_end && state != FIFO_state::lock_wait)
 		{
 			if (!m_invalidated_memory_ranges.empty())
 			{
