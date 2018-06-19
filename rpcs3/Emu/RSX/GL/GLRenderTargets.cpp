@@ -366,7 +366,24 @@ void GLGSRender::init_buffers(rsx::framebuffer_creation_context context, bool sk
 			{
 				if (depth_address == m_depth_surface_info.address)
 				{
-					//Nothing has changed, we're still using the same framebuffer
+					// Nothing has changed, we're still using the same framebuffer
+					// Update flags to match current
+
+					const auto aa_mode = rsx::method_registers.surface_antialias();
+
+					for (u32 index = 0; index < 4; index++)
+					{
+						if (auto surface = std::get<1>(m_rtts.m_bound_render_targets[index]))
+						{
+							surface->write_aa_mode = aa_mode;
+						}
+					}
+
+					if (auto ds = std::get<1>(m_rtts.m_bound_depth_stencil))
+					{
+						ds->write_aa_mode = aa_mode;
+					}
+
 					return;
 				}
 			}
@@ -409,7 +426,7 @@ void GLGSRender::init_buffers(rsx::framebuffer_creation_context context, bool sk
 			m_surface_info[i] = { surface_addresses[i], pitchs[i], false, surface_format, depth_format, clip_horizontal, clip_vertical };
 
 			rtt->tile = find_tile(color_offsets[i], color_locations[i]);
-			rtt->aa_mode = aa_mode;
+			rtt->write_aa_mode = aa_mode;
 			m_gl_texture_cache.notify_surface_changed(surface_addresses[i]);
 			m_gl_texture_cache.tag_framebuffer(surface_addresses[i]);
 		}
@@ -438,7 +455,7 @@ void GLGSRender::init_buffers(rsx::framebuffer_creation_context context, bool sk
 		std::get<1>(m_rtts.m_bound_depth_stencil)->set_rsx_pitch(rsx::method_registers.surface_z_pitch());
 		m_depth_surface_info = { depth_address, depth_surface_pitch, true, surface_format, depth_format, clip_horizontal, clip_vertical };
 
-		ds->aa_mode = aa_mode;
+		ds->write_aa_mode = aa_mode;
 		m_gl_texture_cache.notify_surface_changed(depth_address);
 
 		m_gl_texture_cache.tag_framebuffer(depth_address);
@@ -689,7 +706,7 @@ void GLGSRender::write_buffers()
 				*/
 
 				const u32 range = m_surface_info[i].pitch * m_surface_info[i].height;
-				__glcheck m_gl_texture_cache.flush_memory_to_cache(m_surface_info[i].address, range, true);
+				__glcheck m_gl_texture_cache.flush_memory_to_cache(m_surface_info[i].address, range, true, 0xFF);
 			}
 		};
 
@@ -704,6 +721,6 @@ void GLGSRender::write_buffers()
 		u32 range = m_depth_surface_info.width * m_depth_surface_info.height * 2;
 		if (m_depth_surface_info.depth_format != rsx::surface_depth_format::z16) range *= 2;
 
-		m_gl_texture_cache.flush_memory_to_cache(m_depth_surface_info.address, range, true);
+		m_gl_texture_cache.flush_memory_to_cache(m_depth_surface_info.address, range, true, 0xFF);
 	}
 }

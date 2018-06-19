@@ -20,6 +20,7 @@
 #include "stdafx.h"
 #include "Emu/System.h"
 #include "Crypto/unself.h"
+#include "Utilities/sysinfo.h"
 
 #include <unordered_set>
 #include <thread>
@@ -59,7 +60,10 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 	SubscribeDescription(ui->description_system);
 	SubscribeDescription(ui->description_network);
 	SubscribeDescription(ui->description_emulator);
-	SubscribeDescription(ui->description_gui);
+	if (!game)
+	{
+		SubscribeDescription(ui->description_gui);
+	}
 	SubscribeDescription(ui->description_debug);
 
 	// read tooltips from json
@@ -738,6 +742,9 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 	xemu_settings->EnhanceComboBox(ui->perfOverlayDetailLevel, emu_settings::PerfOverlayDetailLevel);
 	SubscribeTooltip(ui->perfOverlayDetailLevel, json_emu_overlay["perfOverlayDetailLevel"].toString());
 
+	xemu_settings->EnhanceComboBox(ui->perfOverlayPosition, emu_settings::PerfOverlayPosition);
+	SubscribeTooltip(ui->perfOverlayPosition, json_emu_overlay["perfOverlayPosition"].toString());
+
 	// Checkboxes
 
 	SubscribeTooltip(ui->gs_resizeOnBoot, json_emu_misc["gs_resizeOnBoot"].toString());
@@ -773,6 +780,7 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 		ui->label_update_interval->setEnabled(enabled);
 		ui->label_font_size->setEnabled(enabled);
 		ui->perfOverlayDetailLevel->setEnabled(enabled);
+		ui->perfOverlayPosition->setEnabled(enabled);
 		ui->perfOverlayUpdateInterval->setEnabled(enabled);
 		ui->perfOverlayFontSize->setEnabled(enabled);
 	};
@@ -1076,6 +1084,40 @@ settings_dialog::settings_dialog(std::shared_ptr<gui_settings> guiSettings, std:
 
 	xemu_settings->EnhanceCheckBox(ui->spuDebug, emu_settings::SPUDebug);
 	SubscribeTooltip(ui->spuDebug, json_debug["spuDebug"].toString());
+		
+	if (utils::has_rtm())
+	{
+		xemu_settings->EnhanceComboBox(ui->enableTSX, emu_settings::EnableTSX);
+		SubscribeTooltip(ui->enableTSX, json_debug["enableTSX"].toString());
+
+		static const QString tsx_forced  = qstr(fmt::format("%s", tsx_usage::forced));
+		static const QString tsx_default = qstr(xemu_settings->GetSettingDefault(emu_settings::EnableTSX));
+
+		// connect the toogled signal so that the stateChanged signal in EnhanceCheckBox can be prevented
+		connect(ui->enableTSX, &QComboBox::currentTextChanged, [this](const QString& text)
+		{
+			if (text == tsx_forced && !utils::has_mpx() && QMessageBox::No == QMessageBox::critical(this, tr("Haswell/Broadwell TSX Warning"), tr(
+				R"(
+					<p style="white-space: nowrap;">
+						RPCS3 has detected you are using TSX functions on a Haswell or Broadwell CPU.<br>
+						Intel has deactivated these functions in newer Microcode revisions, since they can lead to unpredicted behaviour.<br>
+						That means using TSX may break games or even <font color="red"><b>damage</b></font> your data.<br>
+						We recommend to disable this feature and update your computer BIOS.<br><br>
+						Do you wish to use TSX anyway?
+					</p>
+				)"
+			), QMessageBox::Yes, QMessageBox::No))
+			{
+				// Reset if the messagebox was answered with no. This prevents the currentIndexChanged signal in EnhanceComboBox
+				ui->enableTSX->setCurrentText(tsx_default);
+			}
+		});
+	}
+	else
+	{
+		ui->label_enableTSX->setHidden(true);
+		ui->enableTSX->setHidden(true);
+	}
 
 	//
 	// Layout fix for High Dpi

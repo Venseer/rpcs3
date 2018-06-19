@@ -418,6 +418,9 @@ namespace rsx
 			 */
 			detail_level m_detail;
 
+			screen_quadrant m_quadrant;
+			positioni m_position;
+
 			label m_body;
 			label m_titles;
 
@@ -425,24 +428,39 @@ namespace rsx
 			Timer m_update_timer;
 			u32 m_update_interval; // in ms
 			u32 m_frames{ 0 };
+			std::string m_font;
 			u32 m_font_size;
+			u32 m_margin; // distance to screen borders in px
+			f32 m_opacity;	// 0..1
 
 			bool m_force_update;
+			bool m_is_initialised{ false };
 
 			const std::string title1_medium{"CPU Utilization:"};
 			const std::string title1_high{"Host Utilization (CPU):"};
 			const std::string title2{"Guest Utilization (PS3):"};
 
+			void reset_transform(label& elm) const;
+			void reset_transforms();
 			void reset_body();
 			void reset_titles();
+			void reset_text();
+
+			u32 get_text_opacity() const
+			{
+				return std::clamp(m_opacity + 0.3f, 0.3f, 1.0f);
+			}
 
 		public:
-			perf_metrics_overlay(bool initialize = true);
-
 			void init();
+
 			void set_detail_level(detail_level level);
+			void set_position(screen_quadrant pos);
 			void set_update_interval(u32 update_interval);
+			void set_font(std::string font);
 			void set_font_size(u32 font_size);
+			void set_margin(u32 margin);
+			void set_opacity(f32 opacity);
 			void force_next_update();
 
 			void update() override;
@@ -491,7 +509,7 @@ namespace rsx
 					std::unique_ptr<overlay_element> header_text = std::make_unique<label>(text1);
 					std::unique_ptr<overlay_element> subtext = std::make_unique<label>(text2);
 
-					padding->set_size(1, 10);
+					padding->set_size(1, 1);
 					header_text->set_size(800, 40);
 					header_text->text = text1;
 					header_text->set_font("Arial", 16);
@@ -550,11 +568,11 @@ namespace rsx
 				m_list->set_pos(20, 85);
 
 				m_description->set_font("Arial", 20);
-				m_description->set_pos(20, 50);
+				m_description->set_pos(20, 37);
 				m_description->text = "Save Dialog";
 
 				m_time_thingy->set_font("Arial", 14);
-				m_time_thingy->set_pos(1000, 40);
+				m_time_thingy->set_pos(1000, 30);
 				m_time_thingy->text = current_time();
 
 				static_cast<label*>(m_description.get())->auto_resize();
@@ -722,6 +740,8 @@ namespace rsx
 			overlay_element bottom_bar, background;
 			progress_bar progress_1, progress_2;
 			u8 num_progress_bars = 0;
+			s32 taskbar_index = 0;
+			s32 taskbar_limit = 0;
 
 			bool interactive = false;
 			bool ok_only = false;
@@ -734,7 +754,7 @@ namespace rsx
 				background.back_color.a = 0.85f;
 
 				text_display.set_size(1100, 40);
-				text_display.set_pos(90, 375);
+				text_display.set_pos(90, 364);
 				text_display.set_font("Arial", 16);
 				text_display.align_text(overlay_element::text_align::center);
 				text_display.set_wrap_text(true);
@@ -842,13 +862,13 @@ namespace rsx
 				num_progress_bars = type.progress_bar_count;
 				if (num_progress_bars)
 				{
-					u16 offset = 50;
-					progress_1.set_pos(240, 420);
+					u16 offset = 58;
+					progress_1.set_pos(240, 412);
 
 					if (num_progress_bars > 1)
 					{
-						progress_2.set_pos(240, 470);
-						offset = 90;
+						progress_2.set_pos(240, 462);
+						offset = 98;
 					}
 
 					//Push the other stuff down
@@ -900,6 +920,16 @@ namespace rsx
 				return CELL_OK;
 			}
 
+			u32 progress_bar_count()
+			{
+				return num_progress_bars;
+			}
+
+			void progress_bar_set_taskbar_index(s32 index)
+			{
+				taskbar_index = index;
+			}
+
 			s32 progress_bar_set_message(u32 index, const std::string& msg)
 			{
 				if (index >= num_progress_bars)
@@ -923,6 +953,9 @@ namespace rsx
 				else
 					progress_2.inc(value);
 
+				if (index == taskbar_index || taskbar_index == -1)
+					Emu.GetCallbacks().handle_taskbar_progress(1, value);
+
 				return CELL_OK;
 			}
 
@@ -936,6 +969,8 @@ namespace rsx
 				else
 					progress_2.set_value(0.f);
 
+				Emu.GetCallbacks().handle_taskbar_progress(0, 0);
+
 				return CELL_OK;
 			}
 
@@ -948,6 +983,17 @@ namespace rsx
 					progress_1.set_limit((float)limit);
 				else
 					progress_2.set_limit((float)limit);
+
+				if (index == taskbar_index)
+				{
+					taskbar_limit = limit;
+					Emu.GetCallbacks().handle_taskbar_progress(2, taskbar_limit);
+				}
+				else if (taskbar_index == -1)
+				{
+					taskbar_limit += limit;
+					Emu.GetCallbacks().handle_taskbar_progress(2, taskbar_limit);
+				}
 
 				return CELL_OK;
 			}
@@ -975,7 +1021,7 @@ namespace rsx
 				image.back_color.a = 0.f;
 
 				text_view.set_pos(85, 0);
-				text_view.set_padding(0.f, 0.f, 30.f, 0.f);
+				text_view.set_padding(0.f, 0.f, 24.f, 0.f);
 				text_view.set_font("Arial", 8);
 				text_view.align_text(overlay_element::text_align::center);
 				text_view.back_color.a = 0.f;
@@ -1044,7 +1090,7 @@ namespace rsx
 				m_text.set_font("Arial", 16);
 				m_text.set_text("Compiling shaders");
 				m_text.auto_resize();
-				m_text.set_pos(20, 700);
+				m_text.set_pos(20, 690);
 
 				m_text.back_color.a = 0.f;
 

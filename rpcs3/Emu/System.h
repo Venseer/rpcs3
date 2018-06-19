@@ -155,6 +155,21 @@ enum class detail_level
 	high,
 };
 
+enum class screen_quadrant
+{
+	top_left,
+	top_right,
+	bottom_left,
+	bottom_right
+};
+
+enum class tsx_usage
+{
+	disabled,
+	enabled,
+	forced,
+};
+
 enum CellNetCtlState : s32;
 enum CellSysutilLang : s32;
 
@@ -167,6 +182,7 @@ struct EmuCallbacks
 	std::function<void()> on_stop;
 	std::function<void()> on_ready;
 	std::function<void()> exit;
+	std::function<void(s32, s32)> handle_taskbar_progress;
 	std::function<std::shared_ptr<class KeyboardHandlerBase>()> get_kb_handler;
 	std::function<std::shared_ptr<class MouseHandlerBase>()> get_mouse_handler;
 	std::function<std::shared_ptr<class pad_thread>()> get_pad_handler;
@@ -322,8 +338,10 @@ struct cfg_root : cfg::node
 		cfg::_bool spu_shared_runtime{this, "SPU Shared Runtime", true}; // Share compiled SPU functions between all threads
 		cfg::_enum<spu_block_size_type> spu_block_size{this, "SPU Block Size"};
 		cfg::_bool spu_accurate_getllar{this, "Accurate GETLLAR", false};
+		cfg::_bool spu_accurate_putlluc{this, "Accurate PUTLLUC", false};
 		cfg::_bool spu_verification{this, "SPU Verification", true}; // Should be enabled
 		cfg::_bool spu_cache{this, "SPU Cache", true};
+		cfg::_enum<tsx_usage> enable_TSX{this, "Enable TSX", tsx_usage::enabled}; // Enable TSX. Forcing this on Haswell/Broadwell CPUs should be used carefully
 
 		cfg::_enum<lib_loading_type> lib_loading{this, "Lib Loader", lib_loading_type::liblv2only};
 		cfg::_bool hook_functions{this, "Hook static functions"};
@@ -366,7 +384,7 @@ struct cfg_root : cfg::node
 		cfg::_bool debug_output{this, "Debug output"};
 		cfg::_bool overlay{this, "Debug overlay"};
 		cfg::_bool gl_legacy_buffers{this, "Use Legacy OpenGL Buffers"};
-		cfg::_bool use_gpu_texture_scaling{this, "Use GPU texture scaling", true};
+		cfg::_bool use_gpu_texture_scaling{this, "Use GPU texture scaling", false};
 		cfg::_bool stretch_to_display_area{this, "Stretch To Display Area"};
 		cfg::_bool force_high_precision_z_buffer{this, "Force High Precision Z buffer"};
 		cfg::_bool strict_rendering_mode{this, "Strict Rendering Mode"};
@@ -409,8 +427,12 @@ struct cfg_root : cfg::node
 
 			cfg::_bool perf_overlay_enabled{this, "Enabled", false};
 			cfg::_enum<detail_level> level{this, "Detail level", detail_level::high};
-			cfg::_int<30, 5000> update_interval{this, "Metrics update interval (ms)", 350};
-			cfg::_int<4, 36> font_size{this, "Font size (px)", 10};
+			cfg::_int<30, 5000> update_interval{ this, "Metrics update interval (ms)", 350 };
+			cfg::_int<4, 36> font_size{ this, "Font size (px)", 10 };
+			cfg::_enum<screen_quadrant> position{this, "Position", screen_quadrant::top_left};
+			cfg::string font{this, "Font", "n023055ms.ttf"};
+			cfg::_int<0, 500> margin{this, "Margin (px)", 50};
+			cfg::_int<0, 100> opacity{this, "Opacity (%)", 70};
 
 		} perf_overlay{this};
 

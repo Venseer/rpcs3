@@ -296,7 +296,7 @@ namespace vk
 				//Scale image to fit
 				//usually we can just get away with nearest filtering
 				u8 samples_u = 1, samples_v = 1;
-				switch (static_cast<vk::render_target*>(vram_texture)->aa_mode)
+				switch (static_cast<vk::render_target*>(vram_texture)->read_aa_mode)
 				{
 				case rsx::surface_antialiasing::diagonal_centered_2_samples:
 					samples_u = 2;
@@ -1041,18 +1041,6 @@ namespace vk
 
 	public:
 
-		struct vk_blit_op_result : public blit_op_result
-		{
-			bool deferred = false;
-			vk::image *src_image = nullptr;
-			vk::image *dst_image = nullptr;
-			vk::image_view *src_view = nullptr;
-
-			using blit_op_result::blit_op_result;
-		};
-
-	public:
-
 		void initialize(vk::render_device& device, VkQueue submit_queue, vk::vk_data_heap& upload_heap)
 		{
 			m_device = &device;
@@ -1133,14 +1121,14 @@ namespace vk
 			return upload_texture(cmd, tex, m_rtts, cmd, const_cast<const VkQueue>(m_submit_queue));
 		}
 
-		vk::image *upload_image_simple(vk::command_buffer& /*cmd*/, u32 address, u32 width, u32 height)
+		vk::image *upload_image_simple(vk::command_buffer& cmd, u32 address, u32 width, u32 height)
 		{
 			//Uploads a linear memory range as a BGRA8 texture
 			auto image = std::make_unique<vk::image>(*m_device, m_memory_types.host_visible_coherent,
 				VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT,
 				VK_IMAGE_TYPE_2D,
 				VK_FORMAT_B8G8R8A8_UNORM,
-				width, height, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_LAYOUT_UNDEFINED,
+				width, height, 1, 1, 1, VK_SAMPLE_COUNT_1_BIT, VK_IMAGE_LAYOUT_PREINITIALIZED,
 				VK_IMAGE_TILING_LINEAR, VK_IMAGE_USAGE_TRANSFER_SRC_BIT, 0);
 
 			VkImageSubresource subresource{};
@@ -1170,6 +1158,8 @@ namespace vk
 
 			image->memory->unmap();
 
+			vk::change_image_layout(cmd, image.get(), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+
 			auto result = image.get();
 			const u32 resource_memory = width * height * 4; //Rough approximate
 			m_discardable_storage.push_back(image);
@@ -1179,21 +1169,49 @@ namespace vk
 			return result;
 		}
 
-		vk_blit_op_result blit(rsx::blit_src_info& src, rsx::blit_dst_info& dst, bool interpolate, rsx::vk_render_targets& m_rtts, vk::command_buffer& cmd)
+		bool blit(rsx::blit_src_info& src, rsx::blit_dst_info& dst, bool interpolate, rsx::vk_render_targets& m_rtts, vk::command_buffer& cmd)
 		{
 			struct blit_helper
 			{
 				vk::command_buffer* commands;
+				VkFormat format;
 				blit_helper(vk::command_buffer *c) : commands(c) {}
 
-				bool deferred = false;
-				vk::image* deferred_op_src = nullptr;
-				vk::image* deferred_op_dst = nullptr;
-
-				void scale_image(vk::image* src, vk::image* dst, areai src_area, areai dst_area, bool /*interpolate*/, bool is_depth, const rsx::typeless_xfer& /*typeless*/)
+				void scale_image(vk::image* src, vk::image* dst, areai src_area, areai dst_area, bool interpolate, bool /*is_depth*/, const rsx::typeless_xfer& xfer_info)
 				{
-					VkImageAspectFlagBits aspect = VK_IMAGE_ASPECT_COLOR_BIT;
-					if (is_depth) aspect = (VkImageAspectFlagBits)(src->info.format == VK_FORMAT_D16_UNORM ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT);
+					const auto src_aspect = vk::get_aspect_flags(src->info.format);
+					const auto dst_aspect = vk::get_aspect_flags(dst->info.format);
+
+					vk::image* real_src = src;
+					vk::image* real_dst = dst;
+
+					if (xfer_info.src_is_typeless)
+					{
+						auto internal_width = src->width() * xfer_info.src_scaling_hint;
+						auto format = vk::get_compatible_sampler_format(vk::get_current_renderer()->get_formats_support(), xfer_info.src_gcm_format);
+
+						// Transfer bits from src to typeless src
+						real_src = vk::get_typeless_helper(format);
+						src_area.x1 = (u16)(src_area.x1 * xfer_info.src_scaling_hint);
+						src_area.x2 = (u16)(src_area.x2 * xfer_info.src_scaling_hint);
+
+						vk::copy_image_typeless(*commands, src, real_src, { 0, 0, (s32)src->width(), (s32)src->height() }, { 0, 0, (s32)internal_width, (s32)src->height() }, 1,
+							vk::get_aspect_flags(src->info.format), vk::get_aspect_flags(format));
+					}
+
+					if (xfer_info.dst_is_typeless)
+					{
+						auto internal_width = dst->width() * xfer_info.dst_scaling_hint;
+						auto format = vk::get_compatible_sampler_format(vk::get_current_renderer()->get_formats_support(), xfer_info.dst_gcm_format);
+
+						// Transfer bits from dst to typeless dst
+						real_dst = vk::get_typeless_helper(format);
+						dst_area.x1 = (u16)(dst_area.x1 * xfer_info.dst_scaling_hint);
+						dst_area.x2 = (u16)(dst_area.x2 * xfer_info.dst_scaling_hint);
+
+						vk::copy_image_typeless(*commands, dst, real_dst, { 0, 0, (s32)dst->width(), (s32)dst->height() }, { 0, 0, (s32)internal_width, (s32)dst->height() }, 1,
+							vk::get_aspect_flags(dst->info.format), vk::get_aspect_flags(format));
+					}
 
 					//Checks
 					if (src_area.x2 <= src_area.x1 || src_area.y2 <= src_area.y1 || dst_area.x2 <= dst_area.x1 || dst_area.y2 <= dst_area.y1)
@@ -1202,13 +1220,13 @@ namespace vk
 						return;
 					}
 
-					if (src_area.x1 < 0 || src_area.x2 > (s32)src->width() || src_area.y1 < 0 || src_area.y2 > (s32)src->height())
+					if (src_area.x1 < 0 || src_area.x2 >(s32)real_src->width() || src_area.y1 < 0 || src_area.y2 >(s32)real_src->height())
 					{
 						LOG_ERROR(RSX, "Blit request denied because the source region does not fit!");
 						return;
 					}
 
-					if (dst_area.x1 < 0 || dst_area.x2 > (s32)dst->width() || dst_area.y1 < 0 || dst_area.y2 > (s32)dst->height())
+					if (dst_area.x1 < 0 || dst_area.x2 >(s32)real_dst->width() || dst_area.y1 < 0 || dst_area.y2 >(s32)real_dst->height())
 					{
 						LOG_ERROR(RSX, "Blit request denied because the destination region does not fit!");
 						return;
@@ -1219,49 +1237,36 @@ namespace vk
 					const auto dst_width = dst_area.x2 - dst_area.x1;
 					const auto dst_height = dst_area.y2 - dst_area.y1;
 
-					deferred_op_src = src;
-					deferred_op_dst = dst;
+					copy_scaled_image(*commands, real_src->value, real_dst->value, real_src->current_layout, real_dst->current_layout, src_area.x1, src_area.y1, src_width, src_height,
+						dst_area.x1, dst_area.y1, dst_width, dst_height, 1, dst_aspect, real_src->info.format == real_dst->info.format,
+						interpolate ? VK_FILTER_LINEAR : VK_FILTER_NEAREST, real_src->info.format, real_dst->info.format);
 
-					if (aspect & (VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT))
+					if (real_dst != dst)
 					{
-						if (src_width != dst_width || src_height != dst_height || src->info.format != dst->info.format)
-						{
-							//Scaled depth scaling
-							deferred = true;
-						}
+						auto internal_width = dst->width() * xfer_info.dst_scaling_hint;
+						vk::copy_image_typeless(*commands, real_dst, dst, { 0, 0, (s32)internal_width, (s32)dst->height() }, { 0, 0, (s32)dst->width(), (s32)dst->height() }, 1,
+							vk::get_aspect_flags(real_dst->info.format), vk::get_aspect_flags(dst->info.format));
 					}
 
-					if (!deferred)
-					{
-						copy_scaled_image(*commands, src->value, dst->value, src->current_layout, dst->current_layout, src_area.x1, src_area.y1, src_width, src_height,
-							dst_area.x1, dst_area.y1, dst_width, dst_height, 1, aspect, src->info.format == dst->info.format);
-					}
-
-					change_image_layout(*commands, dst, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, {(VkImageAspectFlags)aspect, 0, dst->info.mipLevels, 0, dst->info.arrayLayers});
+					change_image_layout(*commands, dst, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, {(VkImageAspectFlags)dst_aspect, 0, dst->info.mipLevels, 0, dst->info.arrayLayers});
+					format = dst->info.format;
 				}
 			}
 			helper(&cmd);
 
 			auto reply = upload_scaled_image(src, dst, interpolate, cmd, m_rtts, helper, cmd, const_cast<const VkQueue>(m_submit_queue));
 
-			vk_blit_op_result result = reply.succeeded;
-			result.real_dst_address = reply.real_dst_address;
-			result.real_dst_size = reply.real_dst_size;
-			result.is_depth = reply.is_depth;
-			result.deferred = helper.deferred;
-			result.dst_image = helper.deferred_op_dst;
-			result.src_image = helper.deferred_op_src;
+			if (reply.succeeded)
+			{
+				if (reply.real_dst_size)
+				{
+					flush_if_cache_miss_likely(helper.format, reply.real_dst_address, reply.real_dst_size, cmd, m_submit_queue);
+				}
 
-			if (!helper.deferred)
-				return result;
+				return true;
+			}
 
-			VkImageSubresourceRange view_range = { VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1 };
-			auto tmp_view = std::make_unique<vk::image_view>(*vk::get_current_renderer(), helper.deferred_op_src->value, VK_IMAGE_VIEW_TYPE_2D,
-					helper.deferred_op_src->info.format, helper.deferred_op_src->native_component_map, view_range);
-
-			result.src_view = tmp_view.get();
-			m_discardable_storage.push_back(tmp_view);
-			return result;
+			return false;
 		}
 
 		const u32 get_unreleased_textures_count() const override

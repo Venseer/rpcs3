@@ -37,6 +37,7 @@ public:
 		PPUDebug,
 		SPUDebug,
 		MaxLLVMThreads,
+		EnableTSX,
 
 		// Graphics
 		Renderer,
@@ -71,6 +72,7 @@ public:
 		// Performance Overlay
 		PerfOverlayEnabled,
 		PerfOverlayDetailLevel,
+		PerfOverlayPosition,
 		PerfOverlayUpdateInterval,
 		PerfOverlayFontSize,
 
@@ -205,6 +207,7 @@ private:
 		{ PPUDebug,                 { "Core", "PPU Debug"}},
 		{ SPUDebug,                 { "Core", "SPU Debug"}},
 		{ MaxLLVMThreads,           { "Core", "Max LLVM Compile Threads"}},
+		{ EnableTSX,                { "Core", "Enable TSX"}},
 
 		// Graphics Tab
 		{ Renderer,                 { "Video", "Renderer"}},
@@ -239,6 +242,7 @@ private:
 		// Performance Overlay
 		{ PerfOverlayEnabled,       { "Video", "Performance Overlay", "Enabled" } },
 		{ PerfOverlayDetailLevel,   { "Video", "Performance Overlay", "Detail level" } },
+		{ PerfOverlayPosition,      { "Video", "Performance Overlay", "Position" } },
 		{ PerfOverlayUpdateInterval,{ "Video", "Performance Overlay", "Metrics update interval (ms)" } },
 		{ PerfOverlayFontSize,      { "Video", "Performance Overlay", "Font size (px)" } },
 

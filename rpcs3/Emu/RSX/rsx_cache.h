@@ -413,6 +413,7 @@ namespace rsx
 				dlg->type.se_normal = true;
 				dlg->type.bg_invisible = true;
 				dlg->type.progress_bar_count = 2;
+				dlg->ProgressBarSetTaskbarIndex(-1); // -1 to combine all progressbars in the taskbar progress
 				dlg->on_close = [](s32 status)
 				{
 					Emu.CallAfter([]()
@@ -423,7 +424,7 @@ namespace rsx
 
 				Emu.CallAfter([&]()
 				{
-					dlg->Create("Preloading cached shaders from disk.\nPlease wait...");
+					dlg->Create("Preloading cached shaders from disk.\nPlease wait...", "Shader Compilation");
 					initialized.store(true);
 				});
 
@@ -457,6 +458,9 @@ namespace rsx
 					dlg->ProgressBarSetLimit(index, limit);
 				});
 			}
+
+			virtual void refresh()
+			{};
 
 			virtual void close()
 			{}
@@ -502,7 +506,7 @@ namespace rsx
 				entries.push_back(tmp);
 			}
 
-			if ((entry_count = entries.size()) <= 2)
+			if ((entry_count = (u32)entries.size()) <= 2)
 				return;
 
 			root.rewind();
@@ -587,16 +591,21 @@ namespace rsx
 				// Wait for the workers to finish their task while updating UI
 				u32 current_progress = 0;
 				u32 last_update_progress = 0;
-				do
+
+				while ((current_progress < entry_count) && !Emu.IsStopped())
 				{
 					std::this_thread::sleep_for(100ms); // Around 10fps should be good enough
 
-					current_progress = processed.load();
-
-					dlg->update_msg(1, current_progress, entry_count);
-					dlg->inc_value(1, current_progress - last_update_progress);
+					current_progress = std::min(processed.load(), entry_count);
+					processed_since_last_update = current_progress - last_update_progress;
 					last_update_progress = current_progress;
-				} while ((current_progress < entry_count) && !Emu.IsStopped());
+
+					if (processed_since_last_update > 0)
+					{
+						dlg->update_msg(1, current_progress, entry_count);
+						dlg->inc_value(1, processed_since_last_update);
+					}
+				}
 
 				// Need to join the threads to be absolutely sure shader compilation is done.
 				for (std::thread& worker_thread : worker_threads)
@@ -615,7 +624,7 @@ namespace rsx
 					processed_since_last_update++;
 					if ((std::chrono::duration_cast<std::chrono::milliseconds>(now - last_update) > 100ms) || (pos == entry_count - 1))
 					{
-						dlg->update_msg(1, pos, entry_count);
+						dlg->update_msg(1, pos + 1, entry_count);
 						dlg->inc_value(1, processed_since_last_update);
 						last_update = now;
 						processed_since_last_update = 0;
@@ -633,6 +642,7 @@ namespace rsx
 				LOG_NOTICE(RSX, "shader cache: %d entries were marked as invalid and removed", invalid_entries.size());
 			}
 
+			dlg->refresh();
 			dlg->close();
 		}
 
