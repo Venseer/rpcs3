@@ -107,20 +107,20 @@
     <IgnoreImportLibrary Condition="'$(Configuration)|$(Platform)'=='Debug - LLVM|x64'">true</IgnoreImportLibrary>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
-    <IncludePath>..\3rdparty\hidapi\hidapi;.\;..\;..\asmjit\src;..\3rdparty\yaml-cpp\include;..\3rdparty\ffmpeg\WindowsInclude;..\3rdparty\cereal\include;..\3rdparty\ffmpeg\Windows\x86_64\Include;$(VC_IncludePath);$(WindowsSDK_IncludePath);$(UniversalCRT_IncludePath);..\3rdparty\minidx12\Include;..\3rdparty\GSL\include;..\3rdparty\libpng;..\3rdparty\GL;..\3rdparty\stblib;..\3rdparty\OpenAL\include;..\3rdparty\pugixml\src;..\3rdparty\Optional;..\3rdparty\discord-rpc\include</IncludePath>
+    <IncludePath>..\3rdparty\hidapi\hidapi;.\;..\;..\asmjit\src;..\3rdparty\yaml-cpp\include;..\3rdparty\ffmpeg\WindowsInclude;..\3rdparty\cereal\include;..\3rdparty\ffmpeg\Windows\x86_64\Include;$(VC_IncludePath);$(WindowsSDK_IncludePath);$(UniversalCRT_IncludePath);..\3rdparty\minidx12\Include;..\3rdparty\GSL\include;..\3rdparty\libpng;..\3rdparty\GL;..\3rdparty\stblib;..\3rdparty\OpenAL\include;..\3rdparty\pugixml\src;..\3rdparty\Optional;..\3rdparty\discord-rpc\include;..\3rdparty\zlib</IncludePath>
     <LibraryPath>$(SolutionDir)lib\$(Configuration)-$(Platform)\;$(UniversalCRT_LibraryPath_x64);$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug - LLVM|x64'">
-    <IncludePath>..\3rdparty\hidapi\hidapi;.\;..\;..\asmjit\src;..\3rdparty\yaml-cpp\include;..\3rdparty\ffmpeg\WindowsInclude;..\3rdparty\cereal\include;..\3rdparty\ffmpeg\Windows\x86_64\Include;$(VC_IncludePath);$(WindowsSDK_IncludePath);$(UniversalCRT_IncludePath);..\3rdparty\minidx12\Include;..\3rdparty\GSL\include;..\3rdparty\libpng;..\3rdparty\GL;..\3rdparty\stblib;..\3rdparty\OpenAL\include;..\3rdparty\pugixml\src;..\3rdparty\Optional;..\3rdparty\discord-rpc\include</IncludePath>
+    <IncludePath>..\3rdparty\hidapi\hidapi;.\;..\;..\asmjit\src;..\3rdparty\yaml-cpp\include;..\3rdparty\ffmpeg\WindowsInclude;..\3rdparty\cereal\include;..\3rdparty\ffmpeg\Windows\x86_64\Include;$(VC_IncludePath);$(WindowsSDK_IncludePath);$(UniversalCRT_IncludePath);..\3rdparty\minidx12\Include;..\3rdparty\GSL\include;..\3rdparty\libpng;..\3rdparty\GL;..\3rdparty\stblib;..\3rdparty\OpenAL\include;..\3rdparty\pugixml\src;..\3rdparty\Optional;..\3rdparty\discord-rpc\include;..\3rdparty\zlib</IncludePath>
     <LibraryPath>$(SolutionDir)lib\Debug-x64;$(SolutionDir)lib\$(Configuration)-$(Platform)\;$(UniversalCRT_LibraryPath_x64);$(LibraryPath)</LibraryPath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <LibraryPath>$(SolutionDir)lib\$(Configuration)-$(Platform)\;$(UniversalCRT_LibraryPath_x64);$(LibraryPath)</LibraryPath>
-    <IncludePath>..\3rdparty\hidapi\hidapi;.\;..\;..\asmjit\src;..\3rdparty\yaml-cpp\include;..\3rdparty\ffmpeg\WindowsInclude;..\3rdparty\cereal\include;..\3rdparty\ffmpeg\Windows\x86_64\Include;$(VC_IncludePath);$(WindowsSDK_IncludePath);$(UniversalCRT_IncludePath);..\3rdparty\minidx12\Include;..\3rdparty\GSL\include;..\3rdparty\libpng;..\3rdparty\GL;..\3rdparty\stblib;..\3rdparty\OpenAL\include;..\3rdparty\pugixml\src;..\3rdparty\Optional;..\3rdparty\discord-rpc\include</IncludePath>
+    <IncludePath>..\3rdparty\hidapi\hidapi;.\;..\;..\asmjit\src;..\3rdparty\yaml-cpp\include;..\3rdparty\ffmpeg\WindowsInclude;..\3rdparty\cereal\include;..\3rdparty\ffmpeg\Windows\x86_64\Include;$(VC_IncludePath);$(WindowsSDK_IncludePath);$(UniversalCRT_IncludePath);..\3rdparty\minidx12\Include;..\3rdparty\GSL\include;..\3rdparty\libpng;..\3rdparty\GL;..\3rdparty\stblib;..\3rdparty\OpenAL\include;..\3rdparty\pugixml\src;..\3rdparty\Optional;..\3rdparty\discord-rpc\include;..\3rdparty\zlib</IncludePath>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release - LLVM|x64'">
     <LibraryPath>$(SolutionDir)lib\Release-x64;$(SolutionDir)lib\$(Configuration)-$(Platform)\;$(UniversalCRT_LibraryPath_x64);$(LibraryPath)</LibraryPath>
-    <IncludePath>..\3rdparty\hidapi\hidapi;.\;..\;..\asmjit\src;..\3rdparty\yaml-cpp\include;..\3rdparty\ffmpeg\WindowsInclude;..\3rdparty\cereal\include;..\3rdparty\ffmpeg\Windows\x86_64\Include;$(VC_IncludePath);$(WindowsSDK_IncludePath);$(UniversalCRT_IncludePath);..\3rdparty\minidx12\Include;..\3rdparty\GSL\include;..\3rdparty\libpng;..\3rdparty\GL;..\3rdparty\stblib;..\3rdparty\OpenAL\include;..\3rdparty\pugixml\src;..\3rdparty\Optional;..\3rdparty\discord-rpc\include</IncludePath>
+    <IncludePath>..\3rdparty\hidapi\hidapi;.\;..\;..\asmjit\src;..\3rdparty\yaml-cpp\include;..\3rdparty\ffmpeg\WindowsInclude;..\3rdparty\cereal\include;..\3rdparty\ffmpeg\Windows\x86_64\Include;$(VC_IncludePath);$(WindowsSDK_IncludePath);$(UniversalCRT_IncludePath);..\3rdparty\minidx12\Include;..\3rdparty\GSL\include;..\3rdparty\libpng;..\3rdparty\GL;..\3rdparty\stblib;..\3rdparty\OpenAL\include;..\3rdparty\pugixml\src;..\3rdparty\Optional;..\3rdparty\discord-rpc\include;..\3rdparty\zlib</IncludePath>
   </PropertyGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|x64'">
     <ClCompile>
@@ -985,6 +985,7 @@
     <ClCompile Include="rpcs3qt\breakpoint_handler.cpp" />
     <ClCompile Include="rpcs3qt\breakpoint_list.cpp" />
     <ClCompile Include="rpcs3qt\debugger_list.cpp" />
+    <ClCompile Include="rpcs3qt\_discord_utils.cpp" />
     <ClCompile Include="rpcs3qt\find_dialog.cpp" />
     <ClCompile Include="rpcs3qt\gamepads_settings_dialog.cpp" />
     <ClCompile Include="rpcs3qt\game_compatibility.cpp" />
@@ -1424,6 +1425,7 @@
       <Outputs Condition="'$(Configuration)|$(Platform)'=='Debug - LLVM|x64'">.\QTGeneratedFiles\$(ConfigurationName)\moc_%(Filename).cpp</Outputs>
       <Command Condition="'$(Configuration)|$(Platform)'=='Debug - LLVM|x64'">"$(QTDIR)\bin\moc.exe"  "%(FullPath)" -o ".\QTGeneratedFiles\$(ConfigurationName)\moc_%(Filename).cpp"  -D_WINDOWS -DUNICODE -DWIN32 -DWIN64 -DQT_OPENGL_LIB -DQT_WIDGETS_LIB -DQT_QUICK_LIB -DQT_GUI_LIB -DQT_QML_LIB -DQT_NETWORK_LIB -DQT_CORE_LIB -DQT_WINEXTRAS_LIB -DLLVM_AVAILABLE -D_SCL_SECURE_NO_WARNINGS -D_UNICODE "-I$(VULKAN_SDK)\Include" "-I.\.." "-I.\..\3rdparty\minidx12\Include" "-I$(QTDIR)\include" "-I$(QTDIR)\include\QtOpenGL" "-I$(QTDIR)\include\QtWidgets" "-I$(QTDIR)\include\QtQuick" "-I$(QTDIR)\include\QtGui" "-I$(QTDIR)\include\QtANGLE" "-I$(QTDIR)\include\QtQml" "-I$(QTDIR)\include\QtNetwork" "-I$(QTDIR)\include\QtCore" "-I.\debug" "-I$(QTDIR)\mkspecs\win32-msvc2015" "-I.\QTGeneratedFiles\$(ConfigurationName)\." "-I.\QTGeneratedFiles" "-I$(QTDIR)\include\QtWinExtras"</Command>
     </CustomBuild>
+    <ClInclude Include="rpcs3qt\_discord_utils.h" />
     <ClInclude Include="rpcs3qt\find_dialog.h" />
     <ClInclude Include="rpcs3qt\custom_table_widget_item.h" />
     <ClInclude Include="rpcs3qt\gamepads_settings_dialog.h" />
