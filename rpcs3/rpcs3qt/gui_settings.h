@@ -115,6 +115,7 @@ namespace gui
 		return q_string_pair(path, title.simplified()); // simplified() forces single line text
 	}
 
+	const QString Settings    = QObject::tr("CurrentSettings");
 	const QString Default     = QObject::tr("default");
 	const QString main_window = "main_window";
 	const QString game_list   = "GameList";
@@ -126,7 +127,9 @@ namespace gui
 	const QString gs_frame    = "GSFrame";
 	const QString trophy      = "Trophy";
 	const QString savedata    = "SaveData";
+	const QString users       = "Users";
 	const QString notes       = "Notes";
+	const QString titles      = "Titles";
 
 	const QColor gl_icon_color = QColor(36, 36, 36, 255);
 
@@ -136,6 +139,8 @@ namespace gui
 	const gui_save ib_pkg_success  = gui_save(main_window, "infoBoxEnabledInstallPKG", true);
 	const gui_save ib_pup_success  = gui_save(main_window, "infoBoxEnabledInstallPUP", true);
 	const gui_save ib_show_welcome = gui_save(main_window, "infoBoxEnabledWelcome",    true);
+	const gui_save ib_confirm_exit = gui_save(main_window, "confirmationBoxExitGame",  true);
+	const gui_save ib_confirm_boot = gui_save(main_window, "confirmationBoxBootGame",  true);
 
 	const gui_save fd_install_pkg  = gui_save(main_window, "lastExplorePathPKG",  "");
 	const gui_save fd_install_pup  = gui_save(main_window, "lastExplorePathPUP",  "");
@@ -144,16 +149,20 @@ namespace gui
 	const gui_save fd_decrypt_sprx = gui_save(main_window, "lastExplorePathSPRX", "");
 	const gui_save fd_cg_disasm    = gui_save(main_window, "lastExplorePathCGD",  "");
 
-	const gui_save mw_debugger       = gui_save(main_window, "debuggerVisible", false);
-	const gui_save mw_logger         = gui_save(main_window, "loggerVisible",   true);
-	const gui_save mw_gamelist       = gui_save(main_window, "gamelistVisible", true);
-	const gui_save mw_toolBarVisible = gui_save(main_window, "toolBarVisible",  true);
-	const gui_save mw_geometry       = gui_save(main_window, "geometry",        QByteArray());
-	const gui_save mw_windowState    = gui_save(main_window, "windowState",     QByteArray());
-	const gui_save mw_mwState        = gui_save(main_window, "wwState",         QByteArray());
+	const gui_save mw_debugger         = gui_save(main_window, "debuggerVisible",  false);
+	const gui_save mw_logger           = gui_save(main_window, "loggerVisible",    true);
+	const gui_save mw_gamelist         = gui_save(main_window, "gamelistVisible",  true);
+	const gui_save mw_toolBarVisible   = gui_save(main_window, "toolBarVisible",   true);
+	const gui_save mw_titleBarsVisible = gui_save(main_window, "titleBarsVisible", true);
+	const gui_save mw_geometry         = gui_save(main_window, "geometry",         QByteArray());
+	const gui_save mw_windowState      = gui_save(main_window, "windowState",      QByteArray());
+	const gui_save mw_mwState          = gui_save(main_window, "wwState",          QByteArray());
 
 	const gui_save cat_hdd_game    = gui_save(game_list, "categoryVisibleHDDGame",    true);
 	const gui_save cat_disc_game   = gui_save(game_list, "categoryVisibleDiscGame",   true);
+	const gui_save cat_ps1_game    = gui_save(game_list, "categoryVisiblePS1Game",    true);
+	const gui_save cat_ps2_game    = gui_save(game_list, "categoryVisiblePS2Game",    true);
+	const gui_save cat_psp_game    = gui_save(game_list, "categoryVisiblePSPGame",    true);
 	const gui_save cat_home        = gui_save(game_list, "categoryVisibleHome",       true);
 	const gui_save cat_audio_video = gui_save(game_list, "categoryVisibleAudioVideo", true);
 	const gui_save cat_game_data   = gui_save(game_list, "categoryVisibleGameData",   false);
@@ -171,6 +180,7 @@ namespace gui
 	const gui_save gl_marginFactor = gui_save(game_list, "marginFactor", (qreal) 0.09);
 	const gui_save gl_show_hidden  = gui_save(game_list, "show_hidden",  false);
 	const gui_save gl_hidden_list  = gui_save(game_list, "hidden_list",  QStringList());
+	const gui_save gl_draw_compat  = gui_save(game_list, "draw_compat",  false);
 
 	const gui_save fs_emulator_dir_list = gui_save(fs, "emulator_dir_list", QStringList());
 	const gui_save fs_dev_hdd0_list     = gui_save(fs, "dev_hdd0_list",     QStringList());
@@ -188,7 +198,7 @@ namespace gui
 	const gui_save rsx_geometry = gui_save(rsx, "geometry", QByteArray());
 	const gui_save rsx_states   = gui_save(rsx, "states",   QVariantMap());
 
-	const gui_save m_currentConfig     = gui_save(meta, "currentConfig",     QObject::tr("CurrentSettings"));
+	const gui_save m_currentConfig     = gui_save(meta, "currentConfig",     Settings);
 	const gui_save m_currentStylesheet = gui_save(meta, "currentStylesheet", Default);
 	const gui_save m_saveNotes         = gui_save(meta, "saveNotes",         QVariantMap());
 	const gui_save m_showDebugTab      = gui_save(meta, "showDebugTab",      false);
@@ -216,6 +226,9 @@ namespace gui
 	const gui_save tr_trophy_state  = gui_save(trophy, "trophy_state",  QByteArray());
 
 	const gui_save sd_geometry = gui_save(savedata, "geometry", QByteArray());
+
+	const gui_save um_geometry    = gui_save(users, "geometry",    QByteArray());
+	const gui_save um_active_user = gui_save(users, "active_user", "00000001");
 }
 
 /** Class for GUI settings..
@@ -228,10 +241,11 @@ public:
 	explicit gui_settings(QObject* parent = nullptr);
 	~gui_settings();
 
+	QString GetCurrentUser();
 	QString GetSettingsDir();
 
 	/** Changes the settings file to the destination preset*/
-	void ChangeToConfig(const QString& destination);
+	bool ChangeToConfig(const QString& friendly_name);
 
 	bool GetCategoryVisibility(int cat);
 	QVariant GetValue(const gui_save& entry);
@@ -239,7 +253,8 @@ public:
 	QVariant List2Var(const q_pair_list& list);
 	q_pair_list Var2List(const QVariant &var);
 
-	void ShowInfoBox(const gui_save& entry, const QString& title, const QString& text, QWidget* parent = 0);
+	void ShowConfirmationBox(const QString& title, const QString& text, const gui_save& entry, int* result, QWidget* parent);
+	void ShowInfoBox(const QString& title, const QString& text, const gui_save& entry, QWidget* parent);
 
 	logs::level GetLogLevel();
 	bool GetGamelistColVisibility(int col);
@@ -252,6 +267,9 @@ public:
 public Q_SLOTS:
 	void Reset(bool removeMeta = false);
 
+	/** Remove entry */
+	void RemoveValue(const QString& key, const QString& name);
+
 	/** Write value to entry */
 	void SetValue(const gui_save& entry, const QVariant& value);
 	void SetValue(const QString& key, const QString& name, const QVariant& value);
@@ -263,15 +281,17 @@ public Q_SLOTS:
 
 	void SetCustomColor(int col, const QColor& val);
 
-	void SaveCurrentConfig(const QString& friendlyName);
+	void SaveCurrentConfig(const QString& friendly_name);
 
 	static QSize SizeFromSlider(int pos);
 	static gui_save GetGuiSaveForColumn(int col);
 
 private:
 	QString ComputeSettingsDir();
-	void BackupSettingsToTarget(const QString& destination);
+	void BackupSettingsToTarget(const QString& friendly_name);
+	void ShowBox(bool confirm, const QString& title, const QString& text, const gui_save& entry, int* result, QWidget* parent);
 
 	QSettings m_settings;
 	QDir m_settingsDir;
+	QString m_current_name;
 };

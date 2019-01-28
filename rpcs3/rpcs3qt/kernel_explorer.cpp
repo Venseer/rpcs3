@@ -1,5 +1,5 @@
 #include "stdafx.h"
-#include "Emu/Memory/Memory.h"
+#include "Emu/Memory/vm.h"
 #include "Emu/System.h"
 
 #include "Emu/IdManager.h"
@@ -63,14 +63,14 @@ void kernel_explorer::Update()
 {
 	m_tree->clear();
 
-	const auto vm_block = vm::get(vm::user_space);
+	const auto dct = fxm::get<lv2_memory_container>();
 
-	if (!vm_block)
+	if (!dct)
 	{
 		return;
 	}
 
-	const u32 total_memory_usage = vm_block->used();
+	const u32 total_memory_usage = dct->used;
 
 	QTreeWidgetItem* root = new QTreeWidgetItem();
 	root->setText(0, qstr(fmt::format("Process, ID = 0x00000001, Total Memory Usage = 0x%x (%0.2f MB)", total_memory_usage, (float)total_memory_usage / (1024 * 1024))));
@@ -261,18 +261,18 @@ void kernel_explorer::Update()
 
 	lv2_types.emplace_back(l_addTreeChild(root, "PPU Threads"));
 
-	idm::select<ppu_thread>([&](u32 id, ppu_thread& ppu)
+	idm::select<named_thread<ppu_thread>>([&](u32 id, ppu_thread& ppu)
 	{
 		lv2_types.back().count++;
-		l_addTreeChild(lv2_types.back().node, qstr(fmt::format("PPU Thread: ID = 0x%08x '%s'", id, ppu.get_name())));
+		l_addTreeChild(lv2_types.back().node, qstr(fmt::format("PPU Thread: ID = 0x%08x '%s'", id, ppu.ppu_name.get())));
 	});
 
 	lv2_types.emplace_back(l_addTreeChild(root, "SPU Threads"));
 
-	idm::select<SPUThread>([&](u32 id, SPUThread& spu)
+	idm::select<named_thread<spu_thread>>([&](u32 id, spu_thread& spu)
 	{
 		lv2_types.back().count++;
-		l_addTreeChild(lv2_types.back().node, qstr(fmt::format("SPU Thread: ID = 0x%08x '%s'", id, spu.get_name())));
+		l_addTreeChild(lv2_types.back().node, qstr(fmt::format("SPU Thread: ID = 0x%08x '%s'", id, spu.spu_name.get())));
 	});
 
 	lv2_types.emplace_back(l_addTreeChild(root, "SPU Thread Groups"));

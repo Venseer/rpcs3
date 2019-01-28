@@ -11,13 +11,45 @@ namespace rsx
 {
 	namespace overlays
 	{
+		inline color4f convert_color_code(std::string hex_color, f32 opacity = 1.0f)
+		{
+			if (hex_color.length() > 0 && hex_color[0] == '#')
+			{
+				hex_color.erase(0, 1);
+			}
+
+			unsigned long hexval;
+			const int len = hex_color.length();
+
+			try
+			{
+				if (len != 6 && len != 8)
+				{
+					fmt::throw_exception("wrong length: %d", len);
+				}
+				hexval = std::stoul(hex_color, nullptr, 16);
+			}
+			catch (const std::exception& e)
+			{
+				LOG_ERROR(RSX, "Overlays: tried to convert incompatible color code: '%s' exception: '%s'", hex_color, e.what());
+				return color4f(0.0f, 0.0f, 0.0f, 0.0f);
+			}
+
+			const int r = (len == 8 ? (hexval >> 24) : (hexval >> 16)) & 0xff;
+			const int g = (len == 8 ? (hexval >> 16) : (hexval >> 8)) & 0xff;
+			const int b = (len == 8 ? (hexval >> 8) : (hexval >> 0)) & 0xff;
+			const int a = len == 8 ? ((hexval >> 0) & 0xff) : 255;
+
+			return color4f(r / 255.f, g / 255.f, b / 255.f, a / 255.f * opacity);
+		}
+
 		void perf_metrics_overlay::reset_transform(label& elm) const
 		{
 			const u32 text_padding = m_font_size / 2;
 
 			// left, top, right, bottom
 			const areau padding { text_padding, text_padding - 4, text_padding, text_padding };
-			const positionu margin { m_margin, m_margin };
+			const positionu margin { m_margin_x, m_margin_y };
 			positionu pos;
 
 			const auto overlay_width = m_body.w + margin.x;
@@ -43,6 +75,16 @@ namespace rsx
 				break;
 			}
 
+			if (g_cfg.video.perf_overlay.center_x)
+			{
+				pos.x = (virtual_width - m_body.w) / 2;
+			}
+
+			if (g_cfg.video.perf_overlay.center_y)
+			{
+				pos.y = (virtual_height - m_body.h) / 2;
+			}
+
 			elm.set_pos(pos.x, pos.y);
 			elm.set_padding(padding.x1, padding.x2, padding.y1, padding.y2);
 		}
@@ -55,22 +97,17 @@ namespace rsx
 
 		void perf_metrics_overlay::reset_body()
 		{
-			const float text_opacity = get_text_opacity();
-			const float bg_opacity = m_opacity;
-
 			m_body.set_font(m_font.c_str(), m_font_size);
-			m_body.fore_color     = {0xFF / 255.f, 0xE1 / 255.f, 0x38 / 255.f, text_opacity};
-			m_body.back_color     = {0x00 / 255.f, 0x23 / 255.f, 0x39 / 255.f, bg_opacity};
+			m_body.fore_color = convert_color_code(g_cfg.video.perf_overlay.color_body, m_opacity);
+			m_body.back_color = convert_color_code(g_cfg.video.perf_overlay.background_body, m_opacity);
 			reset_transform(m_body);
 		}
 
 		void perf_metrics_overlay::reset_titles()
 		{
-			const float text_opacity = get_text_opacity();
-
 			m_titles.set_font(m_font.c_str(), m_font_size);
-			m_titles.fore_color     = {0xF2 / 256.0, 0x6C / 256.0, 0x24 / 256.0, text_opacity};
-			m_titles.back_color     = {0.0f, 0.0f, 0.0f, 0.0f};
+			m_titles.fore_color = convert_color_code(g_cfg.video.perf_overlay.color_title, m_opacity);
+			m_titles.back_color = convert_color_code(g_cfg.video.perf_overlay.background_title, m_opacity);
 			reset_transform(m_titles);
 
 			switch (m_detail)
@@ -146,9 +183,10 @@ namespace rsx
 			}
 		}
 
-		void perf_metrics_overlay::set_margin(u32 margin)
+		void perf_metrics_overlay::set_margins(u32 margin_x, u32 margin_y)
 		{
-			m_margin = margin;
+			m_margin_x = margin_x;
+			m_margin_y = margin_y;
 
 			if (m_is_initialised)
 			{
@@ -192,7 +230,6 @@ namespace rsx
 
 				u32 ppus{0};
 				u32 spus{0};
-				u32 rawspus{0};
 
 				f32 cpu_usage{-1.f};
 				u32 total_threads{0};
@@ -222,16 +259,20 @@ namespace rsx
 				}
 				case detail_level::medium:
 				{
-					ppus = idm::select<ppu_thread>([&ppu_cycles](u32, ppu_thread& ppu) { ppu_cycles += ppu.get()->get_cycles(); });
+					ppus = idm::select<named_thread<ppu_thread>>([&ppu_cycles](u32, named_thread<ppu_thread>& ppu)
+					{
+						ppu_cycles += thread_ctrl::get_cycles(ppu);
+					});
 
-					spus = idm::select<SPUThread>([&spu_cycles](u32, SPUThread& spu) { spu_cycles += spu.get()->get_cycles(); });
-
-					rawspus = idm::select<RawSPUThread>([&spu_cycles](u32, RawSPUThread& rawspu) { spu_cycles += rawspu.get()->get_cycles(); });
+					spus = idm::select<named_thread<spu_thread>>([&spu_cycles](u32, named_thread<spu_thread>& spu)
+					{
+						spu_cycles += thread_ctrl::get_cycles(spu);
+					});
 
 					if (!rsx_thread)
 						rsx_thread = fxm::get<GSRender>();
 
-					rsx_cycles += rsx_thread->get()->get_cycles();
+					rsx_cycles += rsx_thread->get_cycles();
 
 					total_cycles = ppu_cycles + spu_cycles + rsx_cycles;
 					cpu_usage = m_cpu_stats.get_usage();
@@ -291,7 +332,7 @@ namespace rsx
 					                         " Total : %04.1f %% (%2u)\n\n"
 					                         "%s\n"
 					                         " RSX   : %02u %%",
-					    fps, frametime, std::string(title1_high.size(), ' '), ppu_usage, ppus, spu_usage, spus + rawspus, rsx_usage, cpu_usage, total_threads, std::string(title2.size(), ' '), rsx_load);
+					    fps, frametime, std::string(title1_high.size(), ' '), ppu_usage, ppus, spu_usage, spus, rsx_usage, cpu_usage, total_threads, std::string(title2.size(), ' '), rsx_load);
 					break;
 				}
 				}

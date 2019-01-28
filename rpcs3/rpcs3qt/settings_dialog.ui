@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>752</width>
-    <height>519</height>
+    <height>584</height>
    </rect>
   </property>
   <property name="sizePolicy">
@@ -36,7 +36,7 @@
       </sizepolicy>
      </property>
      <property name="currentIndex">
-      <number>1</number>
+      <number>0</number>
      </property>
      <widget class="QWidget" name="coreTab">
       <attribute name="title">
@@ -100,7 +100,7 @@
               <item>
                <widget class="QRadioButton" name="spu_asmjit">
                 <property name="text">
-                 <string>ASMJIT Recompiler (fastest)</string>
+                 <string>ASMJIT Recompiler (faster)</string>
                 </property>
                </widget>
               </item>
@@ -237,6 +237,13 @@
                 </property>
                </widget>
               </item>
+              <item>
+               <widget class="QCheckBox" name="accurateXFloat">
+                <property name="text">
+                 <string>Accurate xfloat</string>
+                </property>
+               </widget>
+              </item>
              </layout>
             </widget>
            </item>
@@ -263,7 +270,7 @@
          <item>
           <layout class="QVBoxLayout" name="coreTabRightLayout" stretch="1,0">
            <item>
-            <widget class="QGroupBox" name="groupBox_28">
+            <widget class="QGroupBox" name="gb_libs">
              <property name="sizePolicy">
               <sizepolicy hsizetype="Preferred" vsizetype="Preferred">
                <horstretch>0</horstretch>
@@ -342,7 +349,7 @@
         </spacer>
        </item>
        <item>
-        <widget class="QGroupBox" name="groupBox_41">
+        <widget class="QGroupBox" name="gb_description">
          <property name="title">
           <string>Description</string>
          </property>
@@ -381,7 +388,7 @@
          <item>
           <layout class="QVBoxLayout" name="verticalLayout_7">
            <item>
-            <widget class="QGroupBox" name="groupBox_26">
+            <widget class="QGroupBox" name="gb_renderer">
              <property name="title">
               <string>Renderer</string>
              </property>
@@ -393,7 +400,7 @@
             </widget>
            </item>
            <item>
-            <widget class="QGroupBox" name="groupBox_42">
+            <widget class="QGroupBox" name="gb_graphicsAdapter">
              <property name="title">
               <string>Graphics Device</string>
              </property>
@@ -407,7 +414,7 @@
            <item>
             <layout class="QHBoxLayout" name="horizontalLayout_3" stretch="1,1">
              <item>
-              <widget class="QGroupBox" name="groupBox_44">
+              <widget class="QGroupBox" name="gb_aspectRatio">
                <property name="title">
                 <string>Aspect Ratio</string>
                </property>
@@ -419,7 +426,7 @@
               </widget>
              </item>
              <item>
-              <widget class="QGroupBox" name="groupBox_45">
+              <widget class="QGroupBox" name="gb_frameLimit">
                <property name="title">
                 <string>Framelimit</string>
                </property>
@@ -482,7 +489,7 @@
          <item>
           <layout class="QVBoxLayout" name="verticalLayout_21">
            <item>
-            <widget class="QGroupBox" name="groupBox_29">
+            <widget class="QGroupBox" name="gb_default_resolution">
              <property name="title">
               <string>Default Resolution</string>
              </property>
@@ -664,13 +671,6 @@
              </widget>
             </item>
             <item>
-             <widget class="QCheckBox" name="gpuTextureScaling">
-              <property name="text">
-               <string>Use GPU Texture Scaling</string>
-              </property>
-             </widget>
-            </item>
-            <item>
              <widget class="QCheckBox" name="scrictModeRendering">
               <property name="text">
                <string>Strict Rendering Mode</string>
@@ -776,7 +776,7 @@
       <attribute name="title">
        <string>Audio</string>
       </attribute>
-      <layout class="QVBoxLayout" name="verticalLayout_26">
+      <layout class="QVBoxLayout" name="verticalLayout_26" stretch="0,1,0">
        <item>
         <layout class="QHBoxLayout" name="horizontalLayout_9" stretch="1,1,1">
          <item>
@@ -823,21 +823,147 @@
                 </property>
                </widget>
               </item>
+              <item>
+               <spacer name="verticalSpacer_6">
+                <property name="orientation">
+                 <enum>Qt::Vertical</enum>
+                </property>
+                <property name="sizeType">
+                 <enum>QSizePolicy::MinimumExpanding</enum>
+                </property>
+                <property name="sizeHint" stdset="0">
+                 <size>
+                  <width>0</width>
+                  <height>0</height>
+                 </size>
+                </property>
+               </spacer>
+              </item>
              </layout>
             </widget>
            </item>
           </layout>
          </item>
          <item>
-          <widget class="QWidget" name="widget_8" native="true"/>
+          <layout class="QVBoxLayout" name="verticalLayout_37">
+           <item>
+            <widget class="QGroupBox" name="groupBox_6">
+             <property name="title">
+              <string>Volume</string>
+             </property>
+             <layout class="QVBoxLayout" name="verticalLayout_74">
+              <item>
+               <widget class="QLabel" name="masterVolumeLabel">
+                <property name="text">
+                 <string>Master: 0%</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QSlider" name="masterVolume">
+                <property name="orientation">
+                 <enum>Qt::Horizontal</enum>
+                </property>
+                <property name="tickPosition">
+                 <enum>QSlider::TicksBelow</enum>
+                </property>
+                <property name="tickInterval">
+                 <number>50</number>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <spacer name="verticalSpacer_4">
+                <property name="orientation">
+                 <enum>Qt::Vertical</enum>
+                </property>
+                <property name="sizeType">
+                 <enum>QSizePolicy::MinimumExpanding</enum>
+                </property>
+                <property name="sizeHint" stdset="0">
+                 <size>
+                  <width>0</width>
+                  <height>0</height>
+                 </size>
+                </property>
+               </spacer>
+              </item>
+             </layout>
+            </widget>
+           </item>
+          </layout>
          </item>
          <item>
-          <widget class="QWidget" name="widget_2" native="true"/>
+          <layout class="QVBoxLayout" name="verticalLayout_71">
+           <item>
+            <widget class="QGroupBox" name="groupBox_8">
+             <property name="title">
+              <string>Buffering</string>
+             </property>
+             <layout class="QVBoxLayout" name="verticalLayout_75">
+              <item>
+               <widget class="QCheckBox" name="enableBuffering">
+                <property name="text">
+                 <string>Enable Buffering</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="audioBufferDurationLabel">
+                <property name="text">
+                 <string>Audio Buffer Duration: 0ms</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QSlider" name="audioBufferDuration">
+                <property name="orientation">
+                 <enum>Qt::Horizontal</enum>
+                </property>
+                <property name="tickPosition">
+                 <enum>QSlider::TicksBelow</enum>
+                </property>
+                <property name="tickInterval">
+                 <number>10</number>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QCheckBox" name="enableTimeStretching">
+                <property name="text">
+                 <string>Enable Time Stretching</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="timeStretchingThresholdLabel">
+                <property name="text">
+                 <string>Time Stretching Threshold: 0%</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QSlider" name="timeStretchingThreshold">
+                <property name="orientation">
+                 <enum>Qt::Horizontal</enum>
+                </property>
+                <property name="tickPosition">
+                 <enum>QSlider::TicksBelow</enum>
+                </property>
+                <property name="tickInterval">
+                 <number>10</number>
+                </property>
+               </widget>
+              </item>
+             </layout>
+            </widget>
+           </item>
+          </layout>
          </item>
         </layout>
        </item>
        <item>
-        <spacer name="verticalSpacer_6">
+        <spacer name="verticalSpacer_19">
          <property name="orientation">
           <enum>Qt::Vertical</enum>
          </property>
@@ -1008,7 +1134,7 @@
       <attribute name="title">
        <string>System</string>
       </attribute>
-      <layout class="QVBoxLayout" name="verticalLayout_37">
+      <layout class="QVBoxLayout" name="verticalLayout_73">
        <item>
         <layout class="QHBoxLayout" name="horizontalLayout_14" stretch="1,1,1">
          <item>
@@ -1066,6 +1192,88 @@
          </item>
          <item>
           <widget class="QWidget" name="widget_6" native="true"/>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="horizontalLayout_17" stretch="1,1,1">
+         <item>
+          <widget class="QGroupBox" name="gb_enterButtonAssignment">
+           <property name="title">
+            <string>Enter Button Assignment</string>
+           </property>
+           <layout class="QVBoxLayout" name="verticalLayout_72">
+            <item>
+             <widget class="QRadioButton" name="enterButtonAssignCircle">
+              <property name="text">
+               <string>Enter with circle</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QRadioButton" name="enterButtonAssignCross">
+              <property name="text">
+               <string>Enter with cross</string>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item>
+          <widget class="QWidget" name="widget_12" native="true"/>
+         </item>
+         <item>
+          <widget class="QWidget" name="widget_13" native="true"/>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="horizontalLayout_18" stretch="1,1,1">
+         <item>
+          <widget class="QGroupBox" name="gb_DiskCacheClearing">
+           <property name="title">
+            <string>Disk cache</string>
+           </property>
+           <layout class="QVBoxLayout" name="verticalLayout_75">
+            <item>
+             <widget class="QCheckBox" name="enableCacheClearing">
+              <property name="text">
+               <string>Clear cache automatically</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel" name="maximumCacheSizeLabel">
+              <property name="text">
+               <string>Cache size: 3072 MB</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QSlider" name="maximumCacheSize">
+              <property name="pageStep">
+               <number>512</number>
+              </property>
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="tickPosition">
+               <enum>QSlider::TicksBelow</enum>
+              </property>
+              <property name="tickInterval">
+               <number>1024</number>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item>
+          <widget class="QWidget" name="widget_14" native="true"/>
+         </item>
+         <item>
+          <widget class="QWidget" name="widget_15" native="true"/>
          </item>
         </layout>
        </item>
@@ -1376,6 +1584,50 @@
                 </item>
                </layout>
               </item>
+             </layout>
+            </widget>
+           </item>
+           <item>
+            <widget class="QGroupBox" name="groupBox_3">
+             <property name="title">
+              <string>Shader Loading Screen</string>
+             </property>
+             <layout class="QVBoxLayout" name="verticalLayout_70">
+              <item>
+               <widget class="QCheckBox" name="shaderLoadBgEnabled">
+                <property name="text">
+                 <string>Allow custom background</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="label_shaderLoadBgDarkening">
+                <property name="text">
+                 <string>Background darkening:</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QSlider" name="shaderLoadBgDarkening">
+                <property name="orientation">
+                 <enum>Qt::Horizontal</enum>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="label_shaderLoadBgBlur">
+                <property name="text">
+                 <string>Background blur:</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QSlider" name="shaderLoadBgBlur">
+                <property name="orientation">
+                 <enum>Qt::Horizontal</enum>
+                </property>
+               </widget>
+              </item>
               <item>
                <spacer name="verticalSpacer_14">
                 <property name="orientation">
@@ -1433,6 +1685,48 @@
                <widget class="QComboBox" name="perfOverlayPosition"/>
               </item>
               <item>
+               <widget class="QLabel" name="label_margin_x">
+                <property name="text">
+                 <string>Horizontal Margin:</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <layout class="QHBoxLayout" name="layout_margin_x" stretch="0,0">
+                <item>
+                 <widget class="QCheckBox" name="perfOverlayCenterX">
+                  <property name="text">
+                   <string>Centered</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QSpinBox" name="perfOverlayMarginX"/>
+                </item>
+               </layout>
+              </item>
+              <item>
+               <widget class="QLabel" name="label_margin_y">
+                <property name="text">
+                 <string>Vertical Margin:</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <layout class="QHBoxLayout" name="layout_margin_y" stretch="0,0">
+                <item>
+                 <widget class="QCheckBox" name="perfOverlayCenterY">
+                  <property name="text">
+                   <string>Centered</string>
+                  </property>
+                 </widget>
+                </item>
+                <item>
+                 <widget class="QSpinBox" name="perfOverlayMarginY"/>
+                </item>
+               </layout>
+              </item>
+              <item>
                <widget class="QLabel" name="label_update_interval">
                 <property name="text">
                  <string>Update Interval:</string>
@@ -1461,6 +1755,20 @@
               </item>
               <item>
                <widget class="QSlider" name="perfOverlayFontSize">
+                <property name="orientation">
+                 <enum>Qt::Horizontal</enum>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QLabel" name="label_opacity">
+                <property name="text">
+                 <string>Opacity:</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QSlider" name="perfOverlayOpacity">
                 <property name="orientation">
                  <enum>Qt::Horizontal</enum>
                 </property>
@@ -1691,6 +1999,34 @@
                </widget>
               </item>
               <item>
+               <widget class="QCheckBox" name="cb_show_exit_game">
+                <property name="text">
+                 <string>Show Exit Game Dialog</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QCheckBox" name="cb_show_boot_game">
+                <property name="text">
+                 <string>Show Boot Game Dialog</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QCheckBox" name="cb_show_pkg_install">
+                <property name="text">
+                 <string>Show PGK Installation Dialog</string>
+                </property>
+               </widget>
+              </item>
+              <item>
+               <widget class="QCheckBox" name="cb_show_pup_install">
+                <property name="text">
+                 <string>Show PUP Installation Dialog</string>
+                </property>
+               </widget>
+              </item>
+              <item>
                <spacer name="verticalSpacer_17">
                 <property name="orientation">
                  <enum>Qt::Vertical</enum>
@@ -1803,7 +2139,7 @@
        <item>
         <layout class="QHBoxLayout" name="horizontalLayout_21" stretch="1,1,1">
          <item>
-          <widget class="QGroupBox" name="groupBox_48">
+          <widget class="QGroupBox" name="gb_debug_gpu">
            <property name="enabled">
             <bool>true</bool>
            </property>
@@ -1905,6 +2241,20 @@
              <widget class="QCheckBox" name="disableFIFOReordering">
               <property name="text">
                <string>Disable FIFO Reordering</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QCheckBox" name="strictTextureFlushing">
+              <property name="text">
+               <string>Strict Texture Flushing</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QCheckBox" name="gpuTextureScaling">
+              <property name="text">
+               <string>Use GPU Texture Scaling</string>
               </property>
              </widget>
             </item>
@@ -2033,7 +2383,7 @@
     </widget>
    </item>
    <item>
-    <layout class="QHBoxLayout" name="horizontalLayout">
+    <layout class="QHBoxLayout" name="buttonLayout">
      <item alignment="Qt::AlignLeft">
       <widget class="QPushButton" name="okButton">
        <property name="text">

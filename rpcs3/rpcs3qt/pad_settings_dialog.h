@@ -3,36 +3,30 @@
 #include <QButtonGroup>
 #include <QDialog>
 #include <QEvent>
-#include <QKeyEvent>
 #include <QLabel>
+#include <QTabWidget>
 #include <QTimer>
 
-#include "keyboard_pad_handler.h"
-#include "Utilities/types.h"
-#include "Utilities/Config.h"
 #include "Emu/Io/PadHandler.h"
-#include "stdafx.h"
-#include "Emu/System.h"
-
-#ifdef _WIN32
-#include "xinput_pad_handler.h"
-#endif
-#ifdef _MSC_VER
-#include "mm_joystick_handler.h"
-#endif
-#ifdef HAVE_LIBEVDEV
-#include "evdev_joystick_handler.h"
-#endif
-#include "ds4_pad_handler.h"
 
 namespace Ui
 {
 	class pad_settings_dialog;
 }
 
+struct pad_info
+{
+	std::string name;
+	bool is_connected;
+};
+
+Q_DECLARE_METATYPE(pad_info);
+
 class pad_settings_dialog : public QDialog
 {
 	Q_OBJECT
+
+	const int MAX_PLAYERS = 7;
 
 	enum button_ids
 	{
@@ -74,6 +68,8 @@ class pad_settings_dialog : public QDialog
 
 		id_reset_parameters,
 		id_blacklist,
+		id_refresh,
+		id_add_profile,
 		id_ok,
 		id_cancel
 	};
@@ -85,11 +81,32 @@ class pad_settings_dialog : public QDialog
 		QString text;
 	};
 
+	const QString Disconnected_suffix = tr(" (disconnected)");
+
+public:
+	explicit pad_settings_dialog(QWidget *parent = nullptr);
+	~pad_settings_dialog();
+
 private Q_SLOTS:
 	void OnPadButtonClicked(int id);
+	void OnTabChanged(int index);
+	void RefreshInputTypes();
+	void ChangeInputType();
+	/** Save the Pad Configuration to the current Pad Handler Config File */
+	void SaveProfile();
+	void SaveExit();
+	void CancelExit();
 
 private:
 	Ui::pad_settings_dialog *ui;
+
+	// TabWidget
+	QTabWidget* m_tabs;
+
+	// Capabilities
+	bool m_enable_buttons{ false };
+	bool m_enable_rumble{ false };
+	bool m_enable_deadzones{ false };
 
 	// Button Mapping
 	QButtonGroup* m_padButtons;
@@ -102,44 +119,55 @@ private:
 	int rx = 0;
 	int ry = 0;
 
+	// Rumble
+	s32 m_min_force;
+	s32 m_max_force;
+
 	// Backup for standard button palette
 	QPalette m_palette;
 
-	// Pad Handlers 
-	pad_handler m_handler_type;
+	// Pad Handlers
 	std::shared_ptr<PadHandlerBase> m_handler;
 	pad_config m_handler_cfg;
 	std::string m_device_name;
+	std::string m_profile;
+	QTimer m_timer_pad_refresh;
 
 	// Remap Timer
 	const int MAX_SECONDS = 5;
 	int m_seconds = MAX_SECONDS;
 	QTimer m_timer;
 
+	// Mouse Move
+	QPoint m_last_pos;
+
 	// Input timer. Its Callback handles the input
 	QTimer m_timer_input;
 
-	/** Resets the view to default. Resets the Remap Timer */
-	void ReactivateButtons();
-
-	/** Repaints a stick deadzone preview label */
-	void RepaintPreviewLabel(QLabel* l, int dz, int w, int x, int y);
-
-public:
-	explicit pad_settings_dialog(const std::string& device, const std::string& profile, std::shared_ptr<PadHandlerBase> handler, QWidget *parent = nullptr);
-	~pad_settings_dialog();
-
-	/** Handle keyboard handler input */
-	void keyPressEvent(QKeyEvent *keyEvent) override;
-	void mousePressEvent(QMouseEvent *event) override;
-	bool eventFilter(QObject* object, QEvent* event) override;
-
 	/** Update all the Button Labels with current button mapping */
 	void UpdateLabel(bool is_reset = false);
+	void SwitchPadInfo(const std::string& name, bool is_connected);
 
 	/** Enable/Disable Buttons while trying to remap an other */
 	void SwitchButtons(bool is_enabled);
 
-	/** Save the Pad Configuration to the current Pad Handler Config File */
-	void SaveConfig();
+	/** Resets the view to default. Resets the Remap Timer */
+	void ReactivateButtons();
+
+	void InitButtons();
+	void ReloadButtons();
+
+	void ChangeProfile();
+
+	/** Repaints a stick deadzone preview label */
+	void RepaintPreviewLabel(QLabel* l, int dz, int w, int x, int y);
+
+	std::shared_ptr<PadHandlerBase> GetHandler(pad_handler type);
+
+protected:
+	/** Handle keyboard handler input */
+	void keyPressEvent(QKeyEvent *keyEvent) override;
+	void mouseReleaseEvent(QMouseEvent *event) override;
+	void mouseMoveEvent(QMouseEvent *event) override;
+	bool eventFilter(QObject* object, QEvent* event) override;
 };

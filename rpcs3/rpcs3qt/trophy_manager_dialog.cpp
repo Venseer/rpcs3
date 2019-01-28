@@ -2,6 +2,7 @@
 #include "custom_table_widget_item.h"
 #include "table_item_delegate.h"
 #include "qt_utils.h"
+#include "game_list.h"
 
 #include "stdafx.h"
 
@@ -10,7 +11,7 @@
 #include "rpcs3/Emu/VFS.h"
 #include "Emu/System.h"
 
-#include "Emu/Memory/Memory.h"
+#include "Emu/Memory/vm.h"
 #include "Emu/Cell/Modules/sceNpTrophy.h"
 
 #include "yaml-cpp/yaml.h"
@@ -28,8 +29,7 @@
 #include <QUrl>
 #include <QScrollBar>
 #include <QWheelEvent>
-
-static const char* m_TROPHY_DIR = "/dev_hdd0/home/00000001/trophy/";
+#include <QProgressDialog>
 
 namespace
 {
@@ -56,7 +56,10 @@ trophy_manager_dialog::trophy_manager_dialog(std::shared_ptr<gui_settings> gui_s
 	m_show_platinum_trophies = m_gui_settings->GetValue(gui::tr_show_platinum).toBool();
 
 	// HACK: dev_hdd0 must be mounted for vfs to work for loading trophies.
-	vfs::mount("dev_hdd0", Emu.GetHddDir());
+	vfs::mount("/dev_hdd0", Emu.GetHddDir());
+
+	// Get the currently selected user's trophy path.
+	m_trophy_dir = "/dev_hdd0/home/" + Emu.GetUsr() + "/trophy/";
 
 	// Game chooser combo box
 	m_game_combo = new QComboBox();
@@ -66,7 +69,7 @@ trophy_manager_dialog::trophy_manager_dialog(std::shared_ptr<gui_settings> gui_s
 	m_game_progress = new QLabel(tr("Progress: %1% (%2/%3)").arg(0).arg(0).arg(0));
 
 	// Games Table
-	m_game_table = new QTableWidget();
+	m_game_table = new game_list();
 	m_game_table->setObjectName("trophy_manager_game_table");
 	m_game_table->setShowGrid(false);
 	m_game_table->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
@@ -74,7 +77,7 @@ trophy_manager_dialog::trophy_manager_dialog(std::shared_ptr<gui_settings> gui_s
 	m_game_table->verticalScrollBar()->installEventFilter(this);
 	m_game_table->verticalScrollBar()->setSingleStep(20);
 	m_game_table->horizontalScrollBar()->setSingleStep(20);
-	m_game_table->setItemDelegate(new table_item_delegate(this));
+	m_game_table->setItemDelegate(new table_item_delegate(this, true));
 	m_game_table->setSelectionBehavior(QAbstractItemView::SelectRows);
 	m_game_table->setSelectionMode(QAbstractItemView::SingleSelection);
 	m_game_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
@@ -88,7 +91,7 @@ trophy_manager_dialog::trophy_manager_dialog(std::shared_ptr<gui_settings> gui_s
 	m_game_table->installEventFilter(this);
 
 	// Trophy Table
-	m_trophy_table = new QTableWidget();
+	m_trophy_table = new game_list();
 	m_trophy_table->setObjectName("trophy_manager_trophy_table");
 	m_trophy_table->setShowGrid(false);
 	m_trophy_table->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
@@ -96,7 +99,7 @@ trophy_manager_dialog::trophy_manager_dialog(std::shared_ptr<gui_settings> gui_s
 	m_trophy_table->verticalScrollBar()->installEventFilter(this);
 	m_trophy_table->verticalScrollBar()->setSingleStep(20);
 	m_trophy_table->horizontalScrollBar()->setSingleStep(20);
-	m_trophy_table->setItemDelegate(new table_item_delegate(this));
+	m_trophy_table->setItemDelegate(new table_item_delegate(this, true));
 	m_trophy_table->setSelectionBehavior(QAbstractItemView::SelectRows);
 	m_trophy_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
 	m_trophy_table->setColumnCount(TrophyColumns::Count);
@@ -312,15 +315,34 @@ trophy_manager_dialog::trophy_manager_dialog(std::shared_ptr<gui_settings> gui_s
 
 	connect(m_game_table, &QTableWidget::itemSelectionChanged, [this]
 	{
-		m_game_combo->setCurrentText(m_game_table->item(m_game_table->currentRow(), GameColumns::GameName)->text());
+		if (m_game_table->selectedItems().isEmpty())
+		{
+			return;
+		}
+		m_game_combo->setCurrentText(m_game_table->item(m_game_table->selectedItems().first()->row(), GameColumns::GameName)->text());
 	});
 
-	RepaintUI(true);
+	RepaintUI();
+
+	StartTrophyLoadThread();
+}
+
+trophy_manager_dialog::~trophy_manager_dialog()
+{
+	if (m_thread_state != TrophyThreadState::CLOSED)
+	{
+		TrophyThreadState expected = TrophyThreadState::RUNNING;
+		m_thread_state.compare_exchange_strong(expected, TrophyThreadState::CLOSING);
+		while (m_thread_state != TrophyThreadState::CLOSED)
+		{
+			std::this_thread::yield();
+		}
+	}
 }
 
 bool trophy_manager_dialog::LoadTrophyFolderToDB(const std::string& trop_name)
 {
-	std::string trophyPath = m_TROPHY_DIR + trop_name;
+	std::string trophyPath = m_trophy_dir + trop_name;
 
 	// Populate GameTrophiesData
 	std::unique_ptr<GameTrophiesData> game_trophy_data = std::make_unique<GameTrophiesData>();
@@ -389,7 +411,7 @@ bool trophy_manager_dialog::LoadTrophyFolderToDB(const std::string& trop_name)
 	return true;
 }
 
-void trophy_manager_dialog::RepaintUI(bool refresh_trophies)
+void trophy_manager_dialog::RepaintUI()
 {
 	if (m_gui_settings->GetValue(gui::m_enableUIColors).toBool())
 	{
@@ -398,11 +420,6 @@ void trophy_manager_dialog::RepaintUI(bool refresh_trophies)
 	else
 	{
 		m_game_icon_color = gui::utils::get_label_color("gamelist_icon_background_color");
-	}
-
-	if (refresh_trophies)
-	{
-		PopulateTrophyDB();
 	}
 
 	PopulateGameTable();
@@ -570,23 +587,67 @@ void trophy_manager_dialog::ShowContextMenu(const QPoint& loc)
 		QString path = qstr(m_trophies_db[db_ind]->path);
 		QDesktopServices::openUrl(QUrl("file:///" + path));
 	});
-	
+
 	menu->addAction(show_trophy_dir);
 	menu->exec(globalPos);
 }
 
-void trophy_manager_dialog::PopulateTrophyDB()
+void trophy_manager_dialog::StartTrophyLoadThread()
 {
-	m_trophies_db.clear();
-
-	QDirIterator dir_iter(qstr(vfs::get(m_TROPHY_DIR)), QDir::Dirs | QDir::NoDotAndDotDot);
-	while (dir_iter.hasNext())
+	auto progressDialog = new QProgressDialog(
+		tr("Loading trophy data, please wait..."), tr("Cancel"), 0, 1, this,
+		Qt::Dialog | Qt::WindowTitleHint | Qt::CustomizeWindowHint);
+	progressDialog->setWindowTitle(tr("Loading trophies"));
+	connect(progressDialog, &QProgressDialog::canceled, [this]()
 	{
-		dir_iter.next();
-		std::string dirName = sstr(dir_iter.fileName());
-		LOG_TRACE(GENERAL, "Loading trophy dir: %s", dirName);
-		LoadTrophyFolderToDB(dirName);
+		TrophyThreadState expected = TrophyThreadState::RUNNING;
+		m_thread_state.compare_exchange_strong(expected, TrophyThreadState::CLOSING);
+		this->close(); // It's pointless to show an empty window
+	});
+	progressDialog->show();
+
+	auto trophyThread = new trophy_manager_dialog::trophy_load_thread(this);
+	connect(trophyThread, &QThread::finished, trophyThread, &QThread::deleteLater);
+	connect(trophyThread, &QThread::finished, progressDialog, &QProgressDialog::deleteLater);
+	connect(trophyThread, &trophy_manager_dialog::trophy_load_thread::TotalCountChanged, progressDialog, &QProgressDialog::setMaximum);
+	connect(trophyThread, &trophy_manager_dialog::trophy_load_thread::ProcessedCountChanged, progressDialog, &QProgressDialog::setValue);
+	connect(trophyThread, &trophy_manager_dialog::trophy_load_thread::FinishedSuccessfully, this, &trophy_manager_dialog::HandleRepaintUiRequest);
+	m_thread_state = TrophyThreadState::RUNNING;
+	trophyThread->start();
+}
+
+void trophy_manager_dialog::trophy_load_thread::run()
+{
+	m_manager->m_trophies_db.clear();
+
+	QDir trophy_dir(qstr(vfs::get(m_manager->m_trophy_dir)));
+	const auto folder_list = trophy_dir.entryList(QDir::Dirs | QDir::NoDotAndDotDot);
+	const int count = folder_list.count();
+	Q_EMIT TotalCountChanged(count);
+
+	for (int i = 0; m_manager->m_thread_state == TrophyThreadState::RUNNING && i < count; i++)
+	{
+		std::string dir_name = sstr(folder_list.value(i));
+		LOG_TRACE(GENERAL, "Loading trophy dir: %s", dir_name);
+		try
+		{
+			m_manager->LoadTrophyFolderToDB(dir_name);
+		}
+		catch (const std::exception& e)
+		{
+			// TODO: Add error checks & throws to LoadTrophyFolderToDB so that they can be caught here.
+			// Also add a way of showing the number of corrupted/invalid folders in UI somewhere.
+			LOG_ERROR(GENERAL, "Exception occurred while parsing folder %s for trophies: %s", dir_name, e.what());
+		}
+		Q_EMIT ProcessedCountChanged(i + 1);
 	}
+
+	if (m_manager->m_thread_state == TrophyThreadState::RUNNING)
+	{
+		Q_EMIT FinishedSuccessfully();
+	}
+
+	m_manager->m_thread_state = TrophyThreadState::CLOSED;
 }
 
 void trophy_manager_dialog::PopulateGameTable()

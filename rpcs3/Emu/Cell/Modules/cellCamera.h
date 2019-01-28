@@ -2,7 +2,6 @@
 
 #include "Utilities/Timer.h"
 #include "Emu/Cell/lv2/sys_memory.h"
-#include "Utilities/sema.h"
 #include "Utilities/Thread.h"
 
 #include <map>
@@ -310,6 +309,19 @@ enum CellCameraAttribute : s32
 	CELL_CAMERA_ATTRIBUTE_UNKNOWN = 500,
 };
 
+// Request codes
+enum
+{
+	SET_CUR  = 0x01,
+	GET_CUR  = 0x81,
+	GET_MIN  = 0x82,
+	GET_MAX  = 0x83,
+	GET_RES  = 0x84,
+	GET_LEN  = 0x85,
+	GET_INFO = 0x86,
+	GET_DEF  = 0x87,
+};
+
 struct CellCameraInfoEx
 {
 	be_t<s32> format;     // CellCameraFormat
@@ -338,33 +350,43 @@ struct CellCameraReadEx
 	vm::bptr<u8> pbuf;
 };
 
-class camera_thread final : public named_thread
+class camera_context
 {
-private:
 	struct notify_event_data
 	{
 		u64 source;
 		u64 flag;
 	};
 
-	void on_task() override;
-
-	std::string get_name() const override { return "Camera Thread"; }
-
 public:
-	void on_init(const std::shared_ptr<void>&) override;
+	void operator()();
 	void send_attach_state(bool attached);
+	void set_attr(s32 attrib, u32 arg1, u32 arg2);
+
+	/**
+	 * \brief Sets up notify event queue supplied and immediately sends an ATTACH event to it
+	 * \param key Event queue key to add
+	 * \param source Event source port
+	 * \param flag Event flag (CELL_CAMERA_EFLAG_*)
+	 */
+	void add_queue(u64 key, u64 source, u64 flag);
+
+	/**
+	 * \brief Unsets/removes event queue specified
+	 * \param key Event queue key to remove
+	 */
+	void remove_queue(u64 key);
 
 	std::map<u64, notify_event_data> notify_data_map;
 
-	semaphore<> mutex;
-	semaphore<> mutex_notify_data_map;
+	shared_mutex mutex;
+	shared_mutex mutex_notify_data_map;
 	Timer timer;
 
-	atomic_t<u8> read_mode;
-	atomic_t<bool> is_streaming;
-	atomic_t<bool> is_attached;
-	atomic_t<bool> is_open;
+	atomic_t<u8> read_mode{CELL_CAMERA_READ_FUNCCALL};
+	atomic_t<bool> is_streaming{false};
+	atomic_t<bool> is_attached{false};
+	atomic_t<bool> is_open{false};
 
 	CellCameraInfoEx info;
 
@@ -373,13 +395,10 @@ public:
 		u32 v1, v2;
 	};
 	attr_t attr[500]{};
-
-	lv2_memory_container container;
 	atomic_t<u32> frame_num;
-
-	camera_thread() : read_mode(CELL_CAMERA_READ_FUNCCALL) {}
-	~camera_thread() = default;
 };
+
+using camera_thread = named_thread<camera_context>;
 
 /// Shared data between cellGem and cellCamera
 struct gem_camera_shared

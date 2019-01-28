@@ -1,6 +1,7 @@
 #pragma once
 #include "overlay_controls.h"
 
+#include "../../../Utilities/date_time.h"
 #include "../../../Utilities/Thread.h"
 #include "../../Io/PadHandler.h"
 #include "Emu/Memory/vm.h"
@@ -13,8 +14,6 @@
 #include "Emu/Cell/Modules/sceNpTrophy.h"
 #include "Utilities/CPUStats.h"
 #include "Utilities/Timer.h"
-
-#include <time.h>
 
 extern u64 get_system_time();
 
@@ -45,7 +44,7 @@ namespace rsx
 		// Interactable UI element
 		struct user_interface : overlay
 		{
-			//Move this somewhere to avoid duplication
+			// Move this somewhere to avoid duplication
 			enum selection_code
 			{
 				new_save = -1,
@@ -65,8 +64,8 @@ namespace rsx
 				cross
 			};
 
-			u64  input_timestamp = 0;
-			bool exit = false;
+			Timer input_timer;
+			bool  exit = false;
 
 			s32 return_code = CELL_OK;
 			std::function<void(s32 status)> on_close;
@@ -81,101 +80,7 @@ namespace rsx
 
 			void close();
 
-			s32 run_input_loop()
-			{
-				const auto handler = fxm::get<pad_thread>();
-				if (!handler)
-				{
-					LOG_ERROR(RSX, "Pad handler expected but none initialized!");
-					return selection_code::error;
-				}
-
-				const PadInfo& rinfo = handler->GetInfo();
-				if (rinfo.max_connect == 0)
-					return selection_code::error;
-
-				std::array<bool, 8> button_state;
-				button_state.fill(true);
-
-				while (!exit)
-				{
-					if (Emu.IsStopped())
-						return selection_code::canceled;
-
-					if (Emu.IsPaused() || !rinfo.now_connect)
-					{
-						std::this_thread::sleep_for(10ms);
-						continue;
-					}
-
-					for (const auto &pad : handler->GetPads())
-					{
-						for (auto &button : pad->m_buttons)
-						{
-							u8 button_id = 255;
-							if (button.m_offset == CELL_PAD_BTN_OFFSET_DIGITAL1)
-							{
-								switch (button.m_outKeyCode)
-								{
-								case CELL_PAD_CTRL_LEFT:
-									button_id = pad_button::dpad_left;
-									break;
-								case CELL_PAD_CTRL_RIGHT:
-									button_id = pad_button::dpad_right;
-									break;
-								case CELL_PAD_CTRL_DOWN:
-									button_id = pad_button::dpad_down;
-									break;
-								case CELL_PAD_CTRL_UP:
-									button_id = pad_button::dpad_up;
-									break;
-								}
-							}
-							else if (button.m_offset == CELL_PAD_BTN_OFFSET_DIGITAL2)
-							{
-								switch (button.m_outKeyCode)
-								{
-								case CELL_PAD_CTRL_TRIANGLE:
-									button_id = pad_button::triangle;
-									break;
-								case CELL_PAD_CTRL_CIRCLE:
-									button_id = pad_button::circle;
-									break;
-								case CELL_PAD_CTRL_SQUARE:
-									button_id = pad_button::square;
-									break;
-								case CELL_PAD_CTRL_CROSS:
-									button_id = pad_button::cross;
-									break;
-								}
-							}
-
-							if (button_id < 255)
-							{
-								if (button.m_pressed != button_state[button_id])
-									if (button.m_pressed) on_button_pressed(static_cast<pad_button>(button_id));
-
-								button_state[button_id] = button.m_pressed;
-							}
-
-							if (button.m_flush)
-							{
-								button.m_pressed = false;
-								button.m_flush = false;
-								button.m_value = 0;
-							}
-
-							if (exit)
-								return 0;
-						}
-					}
-
-					refresh();
-				}
-
-				//Unreachable
-				return 0;
-			}
+			s32 run_input_loop();
 		};
 
 		class display_manager
@@ -250,7 +155,7 @@ namespace rsx
 			template <typename T>
 			T* add(std::unique_ptr<T>& entry, bool remove_existing = true)
 			{
-				writer_lock lock(m_list_mutex);
+				std::lock_guard lock(m_list_mutex);
 
 				T* e = entry.get();
 				e->uid = m_uid_ctr.fetch_add(1);
@@ -341,7 +246,7 @@ namespace rsx
 			// Deallocate object. Object must first be removed via the remove() functions
 			void dispose(const std::vector<u32>& uids)
 			{
-				writer_lock lock(m_list_mutex);
+				std::lock_guard lock(m_list_mutex);
 
 				if (!m_uids_to_remove.empty() || !m_type_ids_to_remove.empty())
 				{
@@ -403,7 +308,7 @@ namespace rsx
 
 				if (!m_uids_to_remove.empty() || !m_type_ids_to_remove.empty())
 				{
-					writer_lock lock(m_list_mutex);
+					std::lock_guard lock(m_list_mutex);
 					cleanup_internal();
 				}
 			}
@@ -415,7 +320,7 @@ namespace rsx
 			/*
 			   minimal - fps
 			   low - fps, total cpu usage
-			   medium  - fps, detailed cpu usage
+			   medium - fps, detailed cpu usage
 			   high - fps, frametime, detailed cpu usage, thread number, rsx load
 			 */
 			detail_level m_detail;
@@ -432,8 +337,9 @@ namespace rsx
 			u32 m_frames{ 0 };
 			std::string m_font;
 			u32 m_font_size;
-			u32 m_margin; // distance to screen borders in px
-			f32 m_opacity;	// 0..1
+			u32 m_margin_x; // horizontal distance to the screen border relative to the screen_quadrant in px
+			u32 m_margin_y; // vertical distance to the screen border relative to the screen_quadrant in px
+			f32 m_opacity;  // 0..1
 
 			bool m_force_update;
 			bool m_is_initialised{ false };
@@ -448,11 +354,6 @@ namespace rsx
 			void reset_titles();
 			void reset_text();
 
-			f32 get_text_opacity() const
-			{
-				return std::clamp(m_opacity + 0.3f, 0.3f, 1.0f);
-			}
-
 		public:
 			void init();
 
@@ -461,7 +362,7 @@ namespace rsx
 			void set_update_interval(u32 update_interval);
 			void set_font(std::string font);
 			void set_font_size(u32 font_size);
-			void set_margin(u32 margin);
+			void set_margins(u32 margin_x, u32 margin_y);
 			void set_opacity(f32 opacity);
 			void force_next_update();
 
@@ -488,7 +389,7 @@ namespace rsx
 				{
 					std::unique_ptr<overlay_element> image = std::make_unique<image_view>();
 					image->set_size(160, 110);
-					image->set_padding(36, 36, 11, 11); //Square image, 88x88
+					image->set_padding(36, 36, 11, 11); // Square image, 88x88
 
 					if (resource_id != image_resource_id::raw_image)
 					{
@@ -496,13 +397,13 @@ namespace rsx
 					}
 					else if (icon_buf.size())
 					{
-						image->set_padding(0, 0, 11, 11); //Half sized icon, 320x176->160x88
+						image->set_padding(0, 0, 11, 11); // Half sized icon, 320x176->160x88
 						icon_data = std::make_unique<image_info>(icon_buf);
 						static_cast<image_view*>(image.get())->set_raw_image(icon_data.get());
 					}
 					else
 					{
-						//Fallback
+						// Fallback
 						static_cast<image_view*>(image.get())->set_image_resource(resource_config::standard_image_resource::save);
 					}
 
@@ -513,18 +414,18 @@ namespace rsx
 
 					padding->set_size(1, 1);
 					header_text->set_size(800, 40);
-					header_text->text = text1;
+					header_text->set_text(text1);
 					header_text->set_font("Arial", 16);
 					header_text->set_wrap_text(true);
 					subtext->set_size(800, 40);
-					subtext->text = text2;
+					subtext->set_text(text2);
 					subtext->set_font("Arial", 14);
 					subtext->set_wrap_text(true);
 
-					//Auto-resize save details label
+					// Auto-resize save details label
 					static_cast<label*>(subtext.get())->auto_resize(true);
 
-					//Make back color transparent for text
+					// Make back color transparent for text
 					header_text->back_color.a = 0.f;
 					subtext->back_color.a = 0.f;
 
@@ -533,7 +434,7 @@ namespace rsx
 					static_cast<vertical_layout*>(text_stack.get())->add_element(header_text);
 					static_cast<vertical_layout*>(text_stack.get())->add_element(subtext);
 
-					//Pack
+					// Pack
 					this->pack_padding = 15;
 					add_element(image);
 					add_element(text_stack);
@@ -545,15 +446,6 @@ namespace rsx
 			std::unique_ptr<label> m_description;
 			std::unique_ptr<label> m_time_thingy;
 			std::unique_ptr<label> m_no_saves_text;
-
-			std::string current_time()
-			{
-				time_t t = time(NULL);
-				char buf[128];
-				strftime(buf, 128, "%c", localtime(&t));
-
-				return buf;
-			}
 
 			bool m_no_saves = false;
 
@@ -571,11 +463,11 @@ namespace rsx
 
 				m_description->set_font("Arial", 20);
 				m_description->set_pos(20, 37);
-				m_description->text = "Save Dialog";
+				m_description->set_text("Save Dialog");
 
 				m_time_thingy->set_font("Arial", 14);
 				m_time_thingy->set_pos(1000, 30);
-				m_time_thingy->text = current_time();
+				m_time_thingy->set_text(date_time::current_time());
 
 				static_cast<label*>(m_description.get())->auto_resize();
 				static_cast<label*>(m_time_thingy.get())->auto_resize();
@@ -595,7 +487,7 @@ namespace rsx
 					if (m_no_saves)
 						break;
 					return_code = m_list->get_selected_index();
-					//Fall through
+					// Fall through
 				case pad_button::circle:
 					close();
 					break;
@@ -638,15 +530,15 @@ namespace rsx
 
 				if (op >= 8)
 				{
-					m_description->text = "Delete Save";
+					m_description->set_text("Delete Save");
 				}
 				else if (op & 1)
 				{
-					m_description->text = "Load Save";
+					m_description->set_text("Load Save");
 				}
 				else
 				{
-					m_description->text = "Save";
+					m_description->set_text("Save");
 				}
 
 				const bool newpos_head = listSet->newData && listSet->newData->iconPosition == CELL_SAVEDATA_ICONPOS_HEAD;
@@ -727,7 +619,7 @@ namespace rsx
 
 			void update() override
 			{
-				m_time_thingy->set_text(current_time());
+				m_time_thingy->set_text(date_time::current_time());
 				static_cast<label*>(m_time_thingy.get())->auto_resize();
 			}
 		};
@@ -740,6 +632,7 @@ namespace rsx
 			image_button btn_cancel;
 
 			overlay_element bottom_bar, background;
+			image_view background_poster;
 			progress_bar progress_1, progress_2;
 			u8 num_progress_bars = 0;
 			s32 taskbar_index = 0;
@@ -749,8 +642,10 @@ namespace rsx
 			bool ok_only = false;
 			bool cancel_only = false;
 
+			std::unique_ptr<image_info> background_image;
+
 		public:
-			message_dialog()
+			message_dialog(bool use_custom_background = false)
 			{
 				background.set_size(1280, 720);
 				background.back_color.a = 0.85f;
@@ -760,6 +655,7 @@ namespace rsx
 				text_display.set_font("Arial", 16);
 				text_display.align_text(overlay_element::text_align::center);
 				text_display.set_wrap_text(true);
+				text_display.back_color.a = 0.f;
 
 				bottom_bar.back_color = color4f(1.f, 1.f, 1.f, 1.f);
 				bottom_bar.set_size(1200, 2);
@@ -770,17 +666,51 @@ namespace rsx
 				progress_1.back_color = color4f(0.25f, 0.f, 0.f, 0.85f);
 				progress_2.back_color = color4f(0.25f, 0.f, 0.f, 0.85f);
 
-				btn_ok.set_image_resource(resource_config::standard_image_resource::cross);
 				btn_ok.set_text("Yes");
 				btn_ok.set_size(140, 30);
 				btn_ok.set_pos(545, 420);
 				btn_ok.set_font("Arial", 16);
 
-				btn_cancel.set_image_resource(resource_config::standard_image_resource::circle);
 				btn_cancel.set_text("No");
 				btn_cancel.set_size(140, 30);
 				btn_cancel.set_pos(685, 420);
 				btn_cancel.set_font("Arial", 16);
+
+				if (g_cfg.sys.enter_button_assignment == enter_button_assign::circle)
+				{
+					btn_ok.set_image_resource(resource_config::standard_image_resource::circle);
+					btn_cancel.set_image_resource(resource_config::standard_image_resource::cross);
+				}
+				else
+				{
+					btn_ok.set_image_resource(resource_config::standard_image_resource::cross);
+					btn_cancel.set_image_resource(resource_config::standard_image_resource::circle);
+				}
+
+				if (use_custom_background)
+				{
+					auto icon_path = Emu.GetSfoDir() + "/PIC1.PNG";
+					if (!fs::exists(icon_path))
+					{
+						// Fallback path
+						icon_path = Emu.GetSfoDir() + "/ICON0.PNG";
+					}
+
+					if (fs::exists(icon_path))
+					{
+						background_image = std::make_unique<image_info>(icon_path.c_str());
+						if (background_image->data)
+						{
+							f32 color = (100 - g_cfg.video.shader_preloading_dialog.darkening_strength) / 100.f;
+							background_poster.fore_color = color4f(color, color, color, 1.);
+							background.back_color.a = 0.f;
+
+							background_poster.set_size(1280, 720);
+							background_poster.set_raw_image(background_image.get());
+							background_poster.set_blur_strength((u8)g_cfg.video.shader_preloading_dialog.blur_strength);
+						}
+					}
+				}
 
 				return_code = CELL_MSGDIALOG_BUTTON_NONE;
 			}
@@ -788,14 +718,24 @@ namespace rsx
 			compiled_resource get_compiled() override
 			{
 				compiled_resource result;
+
+				if (background_image && background_image->data)
+				{
+					result.add(background_poster.get_compiled());
+				}
+
 				result.add(background.get_compiled());
 				result.add(text_display.get_compiled());
 
 				if (num_progress_bars > 0)
+				{
 					result.add(progress_1.get_compiled());
+				}
 
 				if (num_progress_bars > 1)
+				{
 					result.add(progress_2.get_compiled());
+				}
 
 				if (interactive)
 				{
@@ -824,7 +764,7 @@ namespace rsx
 					}
 					else if (cancel_only)
 					{
-						//Do not accept for cancel-only dialogs
+						// Do not accept for cancel-only dialogs
 						return;
 					}
 					else
@@ -838,7 +778,7 @@ namespace rsx
 				{
 					if (ok_only)
 					{
-						//Ignore cancel operation for Ok-only
+						// Ignore cancel operation for Ok-only
 						return;
 					}
 					else if (cancel_only)
@@ -873,7 +813,7 @@ namespace rsx
 						offset = 98;
 					}
 
-					//Push the other stuff down
+					// Push the other stuff down
 					bottom_bar.translate(0, offset);
 					btn_ok.translate(0, offset);
 					btn_cancel.translate(0, offset);
@@ -932,7 +872,7 @@ namespace rsx
 				taskbar_index = index;
 			}
 
-			s32 progress_bar_set_message(u32 index, const std::string& msg)
+			error_code progress_bar_set_message(u32 index, const std::string& msg)
 			{
 				if (index >= num_progress_bars)
 					return CELL_MSGDIALOG_ERROR_PARAM;
@@ -945,7 +885,7 @@ namespace rsx
 				return CELL_OK;
 			}
 
-			s32 progress_bar_increment(u32 index, f32 value)
+			error_code progress_bar_increment(u32 index, f32 value)
 			{
 				if (index >= num_progress_bars)
 					return CELL_MSGDIALOG_ERROR_PARAM;
@@ -961,7 +901,7 @@ namespace rsx
 				return CELL_OK;
 			}
 
-			s32 progress_bar_reset(u32 index)
+			error_code progress_bar_reset(u32 index)
 			{
 				if (index >= num_progress_bars)
 					return CELL_MSGDIALOG_ERROR_PARAM;
@@ -976,7 +916,7 @@ namespace rsx
 				return CELL_OK;
 			}
 
-			s32 progress_bar_set_limit(u32 index, u32 limit)
+			error_code progress_bar_set_limit(u32 index, u32 limit)
 			{
 				if (index >= num_progress_bars)
 					return CELL_MSGDIALOG_ERROR_PARAM;
@@ -1084,15 +1024,18 @@ namespace rsx
 			u8 current_dot = 255;
 
 			u64 creation_time = 0;
-			u64 expire_time = 0; //Time to end the prompt
-			u64 urgency_ctr = 0; //How critical it is to show to the user
+			u64 expire_time = 0; // Time to end the prompt
+			u64 urgency_ctr = 0; // How critical it is to show to the user
 
 			shader_compile_notification()
 			{
+				const u16 pos_x = g_cfg.video.shader_compilation_hint.pos_x;
+				const u16 pos_y = g_cfg.video.shader_compilation_hint.pos_y;
+
 				m_text.set_font("Arial", 16);
 				m_text.set_text("Compiling shaders");
 				m_text.auto_resize();
-				m_text.set_pos(20, 690);
+				m_text.set_pos(pos_x, pos_y);
 
 				m_text.back_color.a = 0.f;
 
@@ -1100,7 +1043,7 @@ namespace rsx
 				{
 					dots[n].set_size(2, 2);
 					dots[n].back_color = color4f(1.f, 1.f, 1.f, 1.f);
-					dots[n].set_pos( m_text.w + 25 + (6 * n), 710);
+					dots[n].set_pos(m_text.w + pos_x + 5 + (6 * n), pos_y + 20);
 				}
 
 				creation_time = get_system_time();
@@ -1112,7 +1055,7 @@ namespace rsx
 
 			void update_animation(u64 t)
 			{
-				//Update rate is twice per second
+				// Update rate is twice per second
 				auto elapsed = t - creation_time;
 				elapsed /= 500000;
 
@@ -1132,7 +1075,7 @@ namespace rsx
 				}
 			}
 
-			//Extends visible time by half a second. Also updates the screen
+			// Extends visible time by half a second. Also updates the screen
 			void touch()
 			{
 				if (urgency_ctr == 0 || urgency_ctr > 8)
@@ -1153,7 +1096,7 @@ namespace rsx
 
 				update_animation(current_time);
 
-				//Usually this method is called during a draw-to-screen operation. Reset urgency ctr
+				// Usually this method is called during a draw-to-screen operation. Reset urgency ctr
 				urgency_ctr = 1;
 			}
 

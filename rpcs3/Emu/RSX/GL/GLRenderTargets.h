@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 #include "../Common/surface_store.h"
 #include "GLHelpers.h"
 #include "stdafx.h"
@@ -49,7 +49,7 @@ namespace rsx
 
 namespace gl
 {
-	class render_target : public texture, public rsx::ref_counted, public rsx::render_target_descriptor<texture*>
+	class render_target : public viewable_image, public rsx::ref_counted, public rsx::render_target_descriptor<texture*>
 	{
 		u32 rsx_pitch = 0;
 		u16 native_pitch = 0;
@@ -60,11 +60,9 @@ namespace gl
 		u16 surface_width = 0;
 		u16 surface_pixel_size = 0;
 
-		std::unordered_map<u32, std::unique_ptr<texture_view>> views;
-
 	public:
 		render_target(GLuint width, GLuint height, GLenum sized_format)
-			:texture(GL_TEXTURE_2D, width, height, 1, 1, sized_format)
+			: viewable_image(GL_TEXTURE_2D, width, height, 1, 1, sized_format)
 		{}
 
 		void set_cleared(bool clear=true)
@@ -114,21 +112,6 @@ namespace gl
 			return (gl::texture*)this;
 		}
 
-		texture_view* get_view(u32 remap_encoding, const std::pair<std::array<u8, 4>, std::array<u8, 4>>& remap)
-		{
-			auto found = views.find(remap_encoding);
-			if (found != views.end())
-			{
-				return found->second.get();
-			}
-
-			auto mapping = gl::apply_swizzle_remap(get_native_component_layout(), remap);
-			auto view = std::make_unique<texture_view>(this, mapping.data());
-			auto result = view.get();
-			views[remap_encoding] = std::move(view);
-			return result;
-		}
-
 		u32 raw_handle() const
 		{
 			return id();
@@ -147,6 +130,15 @@ namespace gl
 			//Use forward scaling to account for rounding and clamping errors
 			return (rsx::apply_resolution_scale(_width, true) == internal_width) && (rsx::apply_resolution_scale(_height, true) == internal_height);
 		}
+
+		void memory_barrier(gl::command_context& cmd, bool force_init = false);
+		void read_barrier(gl::command_context& cmd) { memory_barrier(cmd, true); }
+		void write_barrier(gl::command_context& cmd) { memory_barrier(cmd, false); }
+	};
+
+	struct framebuffer_holder : public gl::fbo, public rsx::ref_counted
+	{
+		using gl::fbo::fbo;
 	};
 }
 
@@ -159,7 +151,7 @@ struct gl_render_target_traits
 
 	static
 	std::unique_ptr<gl::render_target> create_new_surface(
-		u32 /*address*/,
+		u32 address,
 		rsx::surface_color_format surface_color_format,
 		size_t width,
 		size_t height,
@@ -177,6 +169,7 @@ struct gl_render_target_traits
 		result->set_native_component_layout(native_layout);
 		result->old_contents = old_surface;
 
+		result->queue_tag(address);
 		result->set_cleared(false);
 		result->update_surface();
 		return result;
@@ -184,7 +177,7 @@ struct gl_render_target_traits
 
 	static
 	std::unique_ptr<gl::render_target> create_new_surface(
-			u32 /*address*/,
+			u32 address,
 		rsx::surface_depth_format surface_depth_format,
 			size_t width,
 			size_t height,
@@ -204,6 +197,7 @@ struct gl_render_target_traits
 		result->set_native_component_layout(native_layout);
 		result->old_contents = old_surface;
 
+		result->queue_tag(address);
 		result->set_cleared(false);
 		result->update_surface();
 		return result;
@@ -226,11 +220,12 @@ struct gl_render_target_traits
 	static void prepare_ds_for_sampling(void *, gl::render_target*) {}
 
 	static
-	void invalidate_surface_contents(void *, gl::render_target *surface, gl::render_target* old_surface)
+	void invalidate_surface_contents(u32 address, void *, gl::render_target *surface, gl::render_target* old_surface)
 	{
-		surface->set_cleared(false);
 		surface->old_contents = old_surface;
 		surface->reset_aa_mode();
+		surface->queue_tag(address);
+		surface->set_cleared(false);
 	}
 
 	static
@@ -308,15 +303,21 @@ struct gl_render_target_traits
 
 struct gl_render_targets : public rsx::surface_store<gl_render_target_traits>
 {
-	void free_invalidated()
+	std::vector<GLuint> free_invalidated()
 	{
+		std::vector<GLuint> removed;
 		invalidated_resources.remove_if([&](auto &rtt)
 		{
 			if (rtt->deref_count >= 2)
+			{
+				removed.push_back(rtt->id());
 				return true;
+			}
 
 			rtt->deref_count++;
 			return false;
 		});
+
+		return removed;
 	}
 };

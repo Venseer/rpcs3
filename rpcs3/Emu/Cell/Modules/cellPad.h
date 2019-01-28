@@ -1,19 +1,20 @@
 #pragma once
 
+#include "Emu/Io/PadHandler.h"
+#include <array>
 
-
-enum
+enum CellPadError : u32
 {
-	CELL_PAD_ERROR_FATAL = 0x80121101,
-	CELL_PAD_ERROR_INVALID_PARAMETER = 0x80121102,
-	CELL_PAD_ERROR_ALREADY_INITIALIZED = 0x80121103,
-	CELL_PAD_ERROR_UNINITIALIZED = 0x80121104,
+	CELL_PAD_ERROR_FATAL                      = 0x80121101,
+	CELL_PAD_ERROR_INVALID_PARAMETER          = 0x80121102,
+	CELL_PAD_ERROR_ALREADY_INITIALIZED        = 0x80121103,
+	CELL_PAD_ERROR_UNINITIALIZED              = 0x80121104,
 	CELL_PAD_ERROR_RESOURCE_ALLOCATION_FAILED = 0x80121105,
-	CELL_PAD_ERROR_DATA_READ_FAILED = 0x80121106,
-	CELL_PAD_ERROR_NO_DEVICE = 0x80121107,
-	CELL_PAD_ERROR_UNSUPPORTED_GAMEPAD = 0x80121108,
-	CELL_PAD_ERROR_TOO_MANY_DEVICES = 0x80121109,
-	CELL_PAD_ERROR_EBUSY = 0x8012110a,
+	CELL_PAD_ERROR_DATA_READ_FAILED           = 0x80121106,
+	CELL_PAD_ERROR_NO_DEVICE                  = 0x80121107,
+	CELL_PAD_ERROR_UNSUPPORTED_GAMEPAD        = 0x80121108,
+	CELL_PAD_ERROR_TOO_MANY_DEVICES           = 0x80121109,
+	CELL_PAD_ERROR_EBUSY                      = 0x8012110a,
 };
 
 // Controller types
@@ -83,7 +84,7 @@ struct CellPadPeriphData
 	CellPadData cellpad_data;
 };
 
-struct CellCapabilityInfo
+struct CellPadCapabilityInfo
 {
 	be_t<u32> info[CELL_PAD_MAX_CAPABILITY_INFO];
 };
@@ -92,4 +93,16 @@ struct CellPadActParam
 {
 	u8 motor[CELL_PAD_ACTUATOR_MAX];
 	u8 reserved[6];
+};
+
+struct pad_t
+{
+	u32 max_connect;
+	std::array<u32, CELL_PAD_MAX_PORT_NUM> port_setting;
+
+	pad_t(u32 max_connect)
+		: max_connect(max_connect)
+	{
+		port_setting.fill(CELL_PAD_SETTING_PRESS_OFF | CELL_PAD_SETTING_SENSOR_OFF);
+	}
 };

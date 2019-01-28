@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Emu/Memory/Memory.h"
+#include "Emu/Memory/vm.h"
 #include "Emu/Cell/ErrorCodes.h"
 
 // Open Flags
@@ -201,12 +201,26 @@ struct lv2_file final : lv2_fs_object
 
 struct lv2_dir final : lv2_fs_object
 {
-	const fs::dir dir;
+	const std::vector<fs::dir_entry> entries;
 
-	lv2_dir(const char* filename, fs::dir&& dir)
+	// Current reading position
+	atomic_t<u64> pos{0};
+
+	lv2_dir(const char* filename, std::vector<fs::dir_entry>&& entries)
 		: lv2_fs_object(lv2_fs_object::get_mp(filename), filename)
-		, dir(std::move(dir))
+		, entries(std::move(entries))
 	{
+	}
+
+	// Read next
+	const fs::dir_entry* dir_read()
+	{
+		if (const u64 cur = pos++; cur < entries.size())
+		{
+			return &entries[cur];
+		}
+
+		return nullptr;
 	}
 };
 
